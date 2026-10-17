@@ -1,0 +1,10 @@
+[package]
+name = "omnicore-engine"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rusqlite = { version = "0.31", features = ["bundled-sqlcipher"] }
+tokio = { version = "1.37", features = ["rt", "rt-multi-thread", "sync", "macros"] }
+prost = "0.12"
+thiserror = "1.0"
