@@ -3,7 +3,7 @@
     "beforeBuildCommand": "",
     "beforeDevCommand": "",
     "devUrl": "http://localhost:1420",
-    "frontendDist": "../omnicore-ui/ui"
+    "frontendDist": "../ui/dist"
   },
   "identifier": "com.omnicore.ui",
   "app": {
