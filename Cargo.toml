@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "omnicore-engine",
+    "omnicore-ui"
+]
+resolver = "2"

@@ -8,6 +8,9 @@ rusqlite = { version = "0.31", features = ["bundled-sqlcipher"] }
 tokio = { version = "1.37", features = ["rt", "rt-multi-thread", "sync", "macros"] }
 prost = "0.12"
 thiserror = "1.0"
-async-trait = "0.1.92"
-anyhow = "1.0.104"
-reqwest = { version = "0.13.5", features = ["json"] }
+async-trait = "0.1.81"
+anyhow = "1.0.86"
+reqwest = { version = "0.12.5", features = ["json"] }
+
+[build-dependencies]
+tauri-build = "2.0.2"
