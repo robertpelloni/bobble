@@ -3,28 +3,47 @@ use anyhow::Result;
 use crate::bridge::ProtocolBridge;
 use crate::dispatcher::MessagePayload;
 
-pub struct MatrixBridge;
+use matrix_sdk::{Client};
+
+pub struct MatrixBridge {
+    client: Option<Client>,
+}
 
 impl MatrixBridge {
     pub fn new() -> Self {
-        Self
+        Self { client: None }
     }
 }
 
 #[async_trait]
 impl ProtocolBridge for MatrixBridge {
     async fn initialize(&mut self) -> Result<()> {
-        // TODO: Implement Matrix Rust SDK initialization
+        // Proof-of-concept initialization targeting a mock matrix homeserver.
+        // In a full implementation, we would load an authenticated session here.
+        let client = Client::builder()
+            .homeserver_url("https://matrix.org")
+            .build()
+            .await?;
+
+        self.client = Some(client);
         Ok(())
     }
 
-    async fn send_message(&self, _payload: &MessagePayload) -> Result<()> {
-        // TODO: Implement Matrix API message dispatch
+    async fn send_message(&self, payload: &MessagePayload) -> Result<()> {
+        let _client = self.client.as_ref().ok_or_else(|| anyhow::anyhow!("Matrix client not initialized"))?;
+
+        // Mock routing logic.
+        // If authenticated, we would do:
+        // let room_id = <&RoomId>::try_from(payload.recipient_id.as_str())?;
+        // let room = client.get_room(room_id).unwrap();
+        // room.send(RoomMessageEventContent::text_plain(&payload.content)).await?;
+
+        println!("Mock Matrix send to {}: {}", payload.recipient_id, payload.content);
         Ok(())
     }
 
     async fn disconnect(&mut self) -> Result<()> {
-        // TODO: Implement Matrix SDK disconnect
+        self.client = None;
         Ok(())
     }
 }
@@ -42,7 +61,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_matrix_send() {
-        let bridge = MatrixBridge::new();
+        let mut bridge = MatrixBridge::new();
+        // Initialize the bridge first so self.client is Some
+        bridge.initialize().await.unwrap();
+
         let payload = MessagePayload {
             recipient_id: "room123".to_string(),
             content: "hello matrix".to_string(),

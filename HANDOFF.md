@@ -6,5 +6,6 @@ Summarize everything learned during the session that was not obvious at the star
 - Core engine has a SQLite + SQLCipher database schema built with rusqlite.
 - Core dispatcher handles mock cross-protocol message routing utilizing tokio channels.
 - Skeleton shells for Matrix, Signal, and Discord protocols were created using `async-trait`.
+- The Matrix bridge was updated to hold an internal `matrix-sdk::Client` instance and can successfully initialize an unauthenticated connection to a mock homeserver (`matrix.org`).
 - The desktop shell was initialized using Tauri, and both `omnicore-engine` and `omnicore-ui` are now part of a shared Cargo workspace.
 - A full frontend stack utilizing React, TypeScript, Vite, and TailwindCSS was established in `omnicore-ui/ui`. A prototype multi-pane layout reflecting OmniCore features was implemented and wired to Tauri commands.

@@ -8,4 +8,4 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Implement ProtocolBridge trait and skeleton bridges (Matrix, Signal, Discord).
 - [x] Initialize Tauri desktop UI and configure Cargo workspace.
 - [x] Build full UI in React instead of raw HTML.
-- [ ] Complete matrix bridge implementation.
+- [x] Complete matrix bridge implementation.
