@@ -9,3 +9,5 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Initialize Tauri desktop UI and configure Cargo workspace.
 - [x] Build full UI in React instead of raw HTML.
 - [x] Complete matrix bridge implementation.
+- [x] Complete signal bridge implementation.
+- [x] Complete discord bridge implementation.
