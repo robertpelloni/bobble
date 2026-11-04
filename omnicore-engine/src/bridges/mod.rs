@@ -4,3 +4,4 @@ pub mod discord;
 pub mod simplex;
 pub mod tox;
 pub mod sms;
+pub mod imessage;

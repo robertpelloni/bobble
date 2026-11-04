@@ -21,10 +21,10 @@ Major, long-term structural milestones and structural plans.
 - SimpleX Chat cryptographic queue bridge (`simplex.rs`).
 - Tox DHT P2P transport module (`tox.rs`).
 - GSM/LTE Cellular SMS modem bridge (`sms.rs`).
+- macOS AppleScript / BlueBubbles iMessage relay bridge (`imessage.rs`).
 - Dynamic `BridgeRegistry` and `MultipathRouter` executing sequential fallback cascades.
 
-## Milestone 4: Cross-Platform Shells & Relay Clients (In Progress)
+## Milestone 4: Cross-Platform Shells & Mobile Deployment (In Progress)
 - React Native / Expo mobile application shell (`omnicore-mobile/`).
-- macOS AppleScript / BlueBubbles relay for iMessage.
 - Multi-target bundling (Desktop + Android + iOS).
 - Local P2P network contact synchronization and direct LAN message routing.
