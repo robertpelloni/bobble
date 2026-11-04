@@ -4,9 +4,10 @@ Major, long-term structural milestones and structural plans.
 
 ## Milestone 1: Universal Abstraction Engine & Core Crypto (Completed)
 - Rust-based headless engine (`omnicore-engine`).
-- SQLCipher cryptographic database with contact, mapping, sync token, and message tables.
+- SQLCipher cryptographic database with contact, mapping, thread, attachment, key_store, sync token, and message tables.
 - Async tokio message dispatcher with multi-protocol fallback routing.
 - Strong domain models for cross-protocol identity resolution and message delivery states.
+- Fully documented database architecture in `omnicore-engine/SCHEMA.md`.
 
 ## Milestone 2: Desktop Shell & System Tray Integration (Completed)
 - Tauri v2 desktop integration with native system tray icon and background server quit controls.

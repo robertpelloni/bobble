@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 
 interface BridgeStatusInfo {
-  name: String;
+  name: string;
   protocol: string;
   status: string;
   endpoint: string;

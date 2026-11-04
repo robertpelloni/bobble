@@ -7,14 +7,37 @@ pub struct Database {
     conn: Connection,
 }
 
+#[derive(Debug, Clone)]
+pub struct ThreadRecord {
+    pub id: i64,
+    pub title: String,
+    pub contact_id: i64,
+    pub is_group: bool,
+    pub last_message_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct AttachmentRecord {
+    pub id: i64,
+    pub message_id: i64,
+    pub file_name: String,
+    pub mime_type: String,
+    pub file_size_bytes: i64,
+    pub storage_path: String,
+    pub sha256_hash: String,
+}
+
 impl Database {
     pub fn init<P: AsRef<Path>>(path: P, key: &str) -> Result<Self> {
         let conn = Connection::open(path)?;
 
-        // Use SQLCipher to encrypt the database
+        // Apply SQLCipher encryption key and security configuration
         conn.pragma_update(None, "key", key)?;
+        let _ = conn.pragma_update(None, "cipher_page_size", 4096);
+        let _ = conn.pragma_update(None, "kdf_iter", 256000);
+        let _ = conn.pragma_update(None, "foreign_keys", "ON");
 
-        // Initialize schema with constraints and indices
+        // 1. Unified Contacts table
         conn.execute(
             "CREATE TABLE IF NOT EXISTS contacts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -27,6 +50,7 @@ impl Database {
             [],
         )?;
 
+        // 2. Cross-Protocol Account Mappings
         conn.execute(
             "CREATE TABLE IF NOT EXISTS mappings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,10 +64,25 @@ impl Database {
             [],
         )?;
 
+        // 3. Conversation Threads (direct 1:1 or multi-party channels)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS threads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                contact_id INTEGER NOT NULL,
+                is_group INTEGER NOT NULL DEFAULT 0,
+                last_message_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+                FOREIGN KEY(contact_id) REFERENCES contacts(id) ON DELETE CASCADE
+            )",
+            [],
+        )?;
+
+        // 4. Unified Messages
         conn.execute(
             "CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 contact_id INTEGER NOT NULL,
+                thread_id INTEGER,
                 protocol TEXT NOT NULL,
                 sender TEXT NOT NULL,
                 recipient TEXT NOT NULL,
@@ -51,22 +90,62 @@ impl Database {
                 delivery_state TEXT NOT NULL,
                 timestamp INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
                 is_outgoing INTEGER NOT NULL DEFAULT 1,
-                FOREIGN KEY(contact_id) REFERENCES contacts(id) ON DELETE CASCADE
+                FOREIGN KEY(contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+                FOREIGN KEY(thread_id) REFERENCES threads(id) ON DELETE SET NULL
             )",
             [],
         )?;
 
+        // 5. Encrypted Media Attachments
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_messages_contact ON messages(contact_id, timestamp)",
+            "CREATE TABLE IF NOT EXISTS attachments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL,
+                file_name TEXT NOT NULL,
+                mime_type TEXT NOT NULL,
+                file_size_bytes INTEGER NOT NULL,
+                storage_path TEXT NOT NULL,
+                sha256_hash TEXT NOT NULL,
+                FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE
+            )",
             [],
         )?;
 
+        // 6. Platform Cryptographic Key & Ratchet Store
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS key_store (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                protocol TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                key_type TEXT NOT NULL,
+                encrypted_key_material BLOB NOT NULL,
+                updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+                UNIQUE(protocol, account_id, key_type)
+            )",
+            [],
+        )?;
+
+        // 7. Sync Tokens
         conn.execute(
             "CREATE TABLE IF NOT EXISTS sync_tokens (
                 platform TEXT PRIMARY KEY,
                 token TEXT NOT NULL,
                 updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
             )",
+            [],
+        )?;
+
+        // Indices for high-throughput queries
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_messages_contact ON messages(contact_id, timestamp)",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id, timestamp)",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_attachments_msg ON attachments(message_id)",
             [],
         )?;
 
@@ -119,15 +198,10 @@ impl Database {
         }
     }
 
-    pub fn insert_mapping(
-        &self,
-        contact_id: i64,
-        protocol: ProtocolKind,
-        platform_account_id: &str,
-    ) -> Result<i64> {
+    pub fn insert_thread(&self, title: &str, contact_id: i64, is_group: bool) -> Result<i64> {
         self.conn.execute(
-            "INSERT INTO mappings (contact_id, protocol, platform_account_id, verified) VALUES (?1, ?2, ?3, 1)",
-            params![contact_id, protocol.as_str(), platform_account_id],
+            "INSERT INTO threads (title, contact_id, is_group) VALUES (?1, ?2, ?3)",
+            params![title, contact_id, if is_group { 1 } else { 0 }],
         )?;
         Ok(self.conn.last_insert_rowid())
     }
@@ -147,6 +221,80 @@ impl Database {
             params![contact_id, protocol.as_str(), sender, recipient, content, state_str, if is_outgoing { 1 } else { 0 }],
         )?;
         Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn record_message_with_thread(
+        &self,
+        contact_id: i64,
+        thread_id: i64,
+        protocol: ProtocolKind,
+        sender: &str,
+        recipient: &str,
+        content: &str,
+        is_outgoing: bool,
+    ) -> Result<i64> {
+        let state_str = DeliveryState::Sent.as_str();
+        self.conn.execute(
+            "INSERT INTO messages (contact_id, thread_id, protocol, sender, recipient, content, delivery_state, is_outgoing) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![contact_id, thread_id, protocol.as_str(), sender, recipient, content, state_str, if is_outgoing { 1 } else { 0 }],
+        )?;
+        let msg_id = self.conn.last_insert_rowid();
+
+        // Update thread timestamp
+        let _ = self.conn.execute(
+            "UPDATE threads SET last_message_at = (strftime('%s', 'now')) WHERE id = ?1",
+            params![thread_id],
+        );
+
+        Ok(msg_id)
+    }
+
+    pub fn insert_attachment(
+        &self,
+        message_id: i64,
+        file_name: &str,
+        mime_type: &str,
+        file_size_bytes: i64,
+        storage_path: &str,
+        sha256_hash: &str,
+    ) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO attachments (message_id, file_name, mime_type, file_size_bytes, storage_path, sha256_hash) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![message_id, file_name, mime_type, file_size_bytes, storage_path, sha256_hash],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn save_key_material(
+        &self,
+        protocol: &str,
+        account_id: &str,
+        key_type: &str,
+        key_bytes: &[u8],
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO key_store (protocol, account_id, key_type, encrypted_key_material) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(protocol, account_id, key_type) DO UPDATE SET encrypted_key_material = excluded.encrypted_key_material, updated_at = (strftime('%s', 'now'))",
+            params![protocol, account_id, key_type, key_bytes],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_key_material(
+        &self,
+        protocol: &str,
+        account_id: &str,
+        key_type: &str,
+    ) -> Result<Option<Vec<u8>>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT encrypted_key_material FROM key_store WHERE protocol = ?1 AND account_id = ?2 AND key_type = ?3",
+        )?;
+        let mut rows = stmt.query(params![protocol, account_id, key_type])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(row.get(0)?))
+        } else {
+            Ok(None)
+        }
     }
 
     pub fn update_delivery_state(&self, message_id: i64, state: &DeliveryState) -> Result<()> {
@@ -246,6 +394,61 @@ mod tests {
         assert_eq!(c.name, "Alice");
         assert_eq!(c.primary_protocol, ProtocolKind::Signal);
         assert_eq!(c.fallback_protocols, vec![ProtocolKind::Matrix]);
+
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn test_threads_and_attachments() {
+        let db_path = "test_threads.db";
+        let _ = fs::remove_file(db_path);
+
+        let db = Database::init(db_path, "secret_key").expect("Failed to init db");
+        let contact_id = db.insert_contact("Charlie", "charlie_1", ProtocolKind::Discord, &[]).unwrap();
+        let thread_id = db.insert_thread("Direct Channel", contact_id, false).unwrap();
+        assert_eq!(thread_id, 1);
+
+        let msg_id = db.record_message_with_thread(
+            contact_id,
+            thread_id,
+            ProtocolKind::Discord,
+            "Me",
+            "Charlie",
+            "See attached encrypted report.",
+            true,
+        ).unwrap();
+        assert_eq!(msg_id, 1);
+
+        let attach_id = db.insert_attachment(
+            msg_id,
+            "report.pdf",
+            "application/pdf",
+            1048576,
+            "/vault/encrypted/report.pdf.enc",
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        ).unwrap();
+        assert_eq!(attach_id, 1);
+
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn test_key_store_operations() {
+        let db_path = "test_keys.db";
+        let _ = fs::remove_file(db_path);
+
+        let db = Database::init(db_path, "secret_key").expect("Failed to init db");
+        let key_data = vec![1, 2, 3, 4, 5, 42];
+        db.save_key_material("Signal", "+15550199", "identity_ratchet", &key_data).unwrap();
+
+        let retrieved = db.get_key_material("Signal", "+15550199", "identity_ratchet").unwrap();
+        assert_eq!(retrieved, Some(key_data.clone()));
+
+        // Update key material
+        let new_key = vec![9, 8, 7];
+        db.save_key_material("Signal", "+15550199", "identity_ratchet", &new_key).unwrap();
+        let updated = db.get_key_material("Signal", "+15550199", "identity_ratchet").unwrap();
+        assert_eq!(updated, Some(new_key));
 
         let _ = fs::remove_file(db_path);
     }
