@@ -14,13 +14,16 @@ Major, long-term structural milestones and structural plans.
 - Consolidated single-page multi-pane React dashboard prioritizing highest-value messaging, cross-protocol routing, and bridge management.
 - Live bridge status control deck and routing monitor.
 
-## Milestone 3: Native Protocol Implementations (In Progress)
-- Native bindings for SimpleX Chat isolated broker.
-- Full Matrix E2EE Olm/Megolm session persistence.
-- Signal Protocol Rust ratchet implementation (direct libsignal / signald IPC).
-- Tox DHT P2P transport module.
-- iMessage and SMS relay integration.
+## Milestone 3: Protocol Bridges & Transport Layer (Completed)
+- Matrix homeserver bridge (`matrix-sdk`) with sync token persistence.
+- Signal Protocol IPC daemon bridge (`signald`).
+- Discord REST and gateway bridge (`serenity`).
+- SimpleX Chat cryptographic queue bridge (`simplex.rs`).
+- Tox DHT P2P transport module (`tox.rs`).
+- GSM/LTE Cellular SMS modem bridge (`sms.rs`).
 
-## Milestone 4: Mobile Shells & Peer Discovery (Future)
-- React Native / Flutter mobile clients connecting to the omnicore-engine daemon.
-- P2P local network contact synchronization and direct LAN message routing.
+## Milestone 4: Cross-Platform Shells & Relay Clients (In Progress)
+- React Native / Expo mobile application shell (`omnicore-mobile/`).
+- macOS AppleScript / BlueBubbles relay for iMessage.
+- Multi-target bundling (Desktop + Android + iOS).
+- Local P2P network contact synchronization and direct LAN message routing.

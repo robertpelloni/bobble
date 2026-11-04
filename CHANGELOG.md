@@ -2,6 +2,13 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.3.0:
+  - Mobile Shell Architecture: Established cross-platform React Native / Expo application shell in `omnicore-mobile/` with conversation feeds, protocol badges, bridge telemetry, and daemon IPC abstractions.
+  - Cross-Platform Configuration: Updated `omnicore-ui/tauri.conf.json` with multi-target packaging rules, desktop sizing, and assets.
+- 0.2.3:
+  - Phase 2 Protocol Bridges: Implemented `SimpleXBridge` (`omnicore-engine/src/bridges/simplex.rs`) with unidirectional cryptographic queue routing.
+  - P2P Tox Transport: Implemented `ToxBridge` (`omnicore-engine/src/bridges/tox.rs`) with DHT bootstrap discovery and friend address dispatch.
+  - Cellular SMS Fallback: Implemented `SmsBridge` (`omnicore-engine/src/bridges/sms.rs`) with serial AT modem initialization and cellular fallback dispatch.
 - 0.2.2:
   - SQLCipher Schema Specification: Authored comprehensive relational and security specification in `omnicore-engine/SCHEMA.md`.
   - Database Hardening: Configured `cipher_page_size = 4096`, `kdf_iter = 256000`, and strict foreign key cascading enforcement.
