@@ -24,7 +24,7 @@ Major, long-term structural milestones and structural plans.
 - macOS AppleScript / BlueBubbles iMessage relay bridge (`imessage.rs`).
 - Dynamic `BridgeRegistry` and `MultipathRouter` executing sequential fallback cascades.
 
-## Milestone 4: Cross-Platform Shells & Mobile Deployment (In Progress)
+## Milestone 4: Cross-Platform Shells, LAN Discovery & Mobile Deployment (In Progress)
 - React Native / Expo mobile application shell (`omnicore-mobile/`).
+- Local P2P network peer discovery and beacon synchronization (`discovery.rs`).
 - Multi-target bundling (Desktop + Android + iOS).
-- Local P2P network contact synchronization and direct LAN message routing.

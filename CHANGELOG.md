@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.3.3:
+  - Local P2P Peer Discovery: Added UDP beacon announcement and parsing module in `omnicore-engine/src/discovery.rs` for serverless local area network peer sync.
 - 0.3.2:
   - iMessage Relay Bridge: Implemented `IMessageBridge` (`omnicore-engine/src/bridges/imessage.rs`) targeting macOS BlueBubbles REST API and local AppleScript integration.
 - 0.3.1:

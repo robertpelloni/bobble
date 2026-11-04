@@ -14,8 +14,9 @@ Summarize everything learned during the session that was not obvious at the star
   - SMS Cellular Modem (`sms.rs` AT serial driver)
   - iMessage Relay (`imessage.rs` BlueBubbles/AppleScript)
 - Bridge integration layer (`omnicore-engine/src/router.rs`) contains `BridgeRegistry` and `MultipathRouter` executing sequential fallback cascades.
+- Local P2P discovery layer implemented in `omnicore-engine/src/discovery.rs` for LAN peer announcements and zero-server sync.
 - The desktop shell was expanded using Tauri v2, incorporating native system tray menus, status indicators, and background server termination commands.
 - The desktop frontend UI was completely redesigned and consolidated into a high-value single-page multi-pane interface in React 19 + TypeScript + TailwindCSS.
 - Cross-platform mobile shell established in `omnicore-mobile/` using React Native / Expo, providing on-device conversation feeds, transport tags, and bridge telemetry.
 - Automation scripts were created in `scripts/`: `build.sh`, `test.sh`, `dev.sh`, `run.sh`.
-- Global version is governed by `VERSION.md` (0.3.2).
+- Global version is governed by `VERSION.md` (0.3.3).

@@ -4,3 +4,4 @@ pub mod dispatcher;
 pub mod bridge;
 pub mod bridges;
 pub mod router;
+pub mod discovery;
