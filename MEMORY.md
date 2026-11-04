@@ -11,9 +11,10 @@ Ongoing internal architectural observations, codebase traits, and design prefere
   - SimpleX: Unidirectional isolated cryptographic queue broker routing (`simplex.rs`).
   - Tox: DHT bootstrapping and peer-to-peer friend dispatch (`tox.rs`).
   - SMS: Serial AT cellular modem transport for offline fallback (`sms.rs`).
+- Bridge Integration: `BridgeRegistry` and `MultipathRouter` in `omnicore-engine/src/router.rs` managing dynamic multi-bridge dispatch with automated cascade fallback.
 - Domain Models: Explicit types in `omnicore-engine/src/models.rs` for `ProtocolKind`, `UnifiedContact`, `ProtocolMapping`, `ConversationMessage`, `DeliveryState`, and `RoutingStrategy`.
 - Encrypted Storage: SQLCipher with AES-256-GCM encryption (`cipher_page_size=4096`, `kdf_iter=256000`, `foreign_keys=ON`). Schema includes `contacts`, `mappings`, `threads`, `messages`, `attachments`, `key_store`, and `sync_tokens`. Complete design documented in `omnicore-engine/SCHEMA.md`.
 - Dispatcher: Multi-path timeout fallback engine in `omnicore-engine/src/dispatcher.rs` executing concurrent queues and automated protocol fallback.
 - Desktop UI: React 19 + TypeScript + Vite + TailwindCSS running inside Tauri v2 shell with system tray controls.
-- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.3.0).
+- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.3.1).
 - Build Automation: Consolidated in `scripts/build.sh`, `scripts/run.sh`, `scripts/dev.sh`, and `scripts/test.sh`.

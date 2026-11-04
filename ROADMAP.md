@@ -14,13 +14,14 @@ Major, long-term structural milestones and structural plans.
 - Consolidated single-page multi-pane React dashboard prioritizing highest-value messaging, cross-protocol routing, and bridge management.
 - Live bridge status control deck and routing monitor.
 
-## Milestone 3: Protocol Bridges & Transport Layer (Completed)
+## Milestone 3: Protocol Bridges & Multipath Routing Integration (Completed)
 - Matrix homeserver bridge (`matrix-sdk`) with sync token persistence.
 - Signal Protocol IPC daemon bridge (`signald`).
 - Discord REST and gateway bridge (`serenity`).
 - SimpleX Chat cryptographic queue bridge (`simplex.rs`).
 - Tox DHT P2P transport module (`tox.rs`).
 - GSM/LTE Cellular SMS modem bridge (`sms.rs`).
+- Dynamic `BridgeRegistry` and `MultipathRouter` executing sequential fallback cascades.
 
 ## Milestone 4: Cross-Platform Shells & Relay Clients (In Progress)
 - React Native / Expo mobile application shell (`omnicore-mobile/`).

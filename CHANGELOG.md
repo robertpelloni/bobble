@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.3.1:
+  - Cross-Bridge Integration: Implemented `BridgeRegistry` and `MultipathRouter` (`omnicore-engine/src/router.rs`) with sequential multi-protocol fallback cascades and verified with integration tests.
 - 0.3.0:
   - Mobile Shell Architecture: Established cross-platform React Native / Expo application shell in `omnicore-mobile/` with conversation feeds, protocol badges, bridge telemetry, and daemon IPC abstractions.
   - Cross-Platform Configuration: Updated `omnicore-ui/tauri.conf.json` with multi-target packaging rules, desktop sizing, and assets.
