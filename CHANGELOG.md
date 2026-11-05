@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.3.4:
+  - VoIP & WebRTC Call Session Negotiation: Implemented `CallSession`, SDP offer/answer states, and ICE candidate exchange in `omnicore-engine/src/call.rs` for cross-protocol audio/video calls.
 - 0.3.3:
   - Local P2P Peer Discovery: Added UDP beacon announcement and parsing module in `omnicore-engine/src/discovery.rs` for serverless local area network peer sync.
 - 0.3.2:

@@ -236,7 +236,7 @@ fn get_system_metrics(state: State<'_, AppState>) -> SystemMetrics {
     let elapsed = state.start_time.elapsed().as_secs();
 
     SystemMetrics {
-        version: "0.3.2".to_string(),
+        version: "0.3.4".to_string(),
         active_bridges: active_count,
         queued_messages: 0,
         encryption: "SQLCipher (AES-256-GCM)".to_string(),
