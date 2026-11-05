@@ -12,3 +12,4 @@ pub mod tor;
 pub mod identity;
 pub mod backup;
 pub mod federation;
+pub mod reputation;
