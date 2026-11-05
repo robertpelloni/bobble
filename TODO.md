@@ -14,7 +14,7 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Implement native system tray icon and menu with server management in Tauri.
 - [x] Consolidate dashboard UI into an intuitive single-page multi-pane layout.
 - [x] Wire all backend bridges and metrics to frontend React dashboard.
-- [x] Standardize global version tracking via VERSION.md (v0.3.4).
+- [x] Standardize global version tracking via VERSION.md (v0.3.5).
 - [x] Organize build, dev, and test scripts in `scripts/`.
 - [x] Define domain models (`ProtocolKind`, `UnifiedContact`, `DeliveryState`) and thread querying in `omnicore-engine`.
 - [x] Implement automated timeout-driven fallback dispatching in `omnicore-engine`.
@@ -28,4 +28,5 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Implement macOS AppleScript / BlueBubbles relay bridge in `omnicore-engine/src/bridges/imessage.rs`.
 - [x] Implement local area network P2P peer discovery and beacon handling in `omnicore-engine/src/discovery.rs`.
 - [x] Implement cross-protocol voice/video call session negotiation and WebRTC signaling in `omnicore-engine/src/call.rs`.
-- [ ] Add hardware appliance 24/7 battery & UPS power telemetry daemon.
+- [x] Implement standalone hardware power telemetry daemon in `omnicore-engine/src/telemetry.rs`.
+- [ ] Add offline queue persistence with forward secrecy ratchets.

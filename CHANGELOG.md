@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.3.5:
+  - Standalone Power & Telemetry Daemon: Implemented `TelemetryCollector`, `PowerSource`, `BatteryStatus`, and `HardwareHealth` in `omnicore-engine/src/telemetry.rs` to support 24/7 standalone hardware routing appliances.
 - 0.3.4:
   - VoIP & WebRTC Call Session Negotiation: Implemented `CallSession`, SDP offer/answer states, and ICE candidate exchange in `omnicore-engine/src/call.rs` for cross-protocol audio/video calls.
 - 0.3.3:

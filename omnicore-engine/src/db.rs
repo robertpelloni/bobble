@@ -329,11 +329,19 @@ impl Database {
             let sender: String = row.get(3)?;
             let recipient: String = row.get(4)?;
             let content: String = row.get(5)?;
-            let _state_str: String = row.get(6)?;
+            let state_str: String = row.get(6)?;
             let timestamp: i64 = row.get(7)?;
             let is_outgoing: i64 = row.get(8)?;
 
             let protocol = ProtocolKind::from_str_name(&proto_str).unwrap_or(ProtocolKind::Signal);
+            let state = match state_str.as_str() {
+                "Queued" => DeliveryState::Queued,
+                "Sent" => DeliveryState::Sent,
+                "Delivered" => DeliveryState::Delivered,
+                "Read" => DeliveryState::Read,
+                s if s.starts_with("Failed:") => DeliveryState::Failed(s.trim_start_matches("Failed: ").to_string()),
+                _ => DeliveryState::Delivered,
+            };
 
             Ok(ConversationMessage {
                 id,
@@ -342,7 +350,7 @@ impl Database {
                 sender,
                 recipient,
                 content,
-                state: DeliveryState::Delivered,
+                state,
                 timestamp,
                 is_outgoing: is_outgoing == 1,
             })
