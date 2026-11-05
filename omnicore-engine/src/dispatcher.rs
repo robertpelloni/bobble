@@ -1,8 +1,10 @@
-use tokio::sync::mpsc;
 use prost::Message;
+use std::time::Duration;
 use thiserror::Error;
+use tokio::sync::mpsc;
+use tokio::time::timeout;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Protocol {
     Signal,
     Matrix,
@@ -15,12 +17,12 @@ pub enum Protocol {
 
 #[derive(Clone, PartialEq, Message)]
 pub struct MessagePayload {
-    #[prost(string, tag="1")]
+    #[prost(string, tag = "1")]
     pub recipient_id: String,
-    #[prost(string, tag="2")]
+    #[prost(string, tag = "2")]
     pub content: String,
-    #[prost(string, tag="3")]
-    pub fallback_protocol: String, // String representation for simplicity in prost
+    #[prost(string, tag = "3")]
+    pub fallback_protocol: String,
 }
 
 #[derive(Debug, Error)]
@@ -31,7 +33,7 @@ pub enum DispatchError {
     SendFailed(String),
 }
 
-type DispatchResult = Result<(), DispatchError>;
+pub type DispatchResult = Result<(), DispatchError>;
 
 pub struct Dispatcher {
     sender: mpsc::Sender<(Protocol, MessagePayload)>,
@@ -49,6 +51,26 @@ impl Dispatcher {
             .await
             .map_err(|e| DispatchError::SendFailed(e.to_string()))
     }
+
+    /// Dispatches a message to a primary protocol with automated fallback if sending times out or fails.
+    pub async fn dispatch_with_fallback(
+        &self,
+        primary: Protocol,
+        fallback: Protocol,
+        payload: MessagePayload,
+        timeout_duration: Duration,
+    ) -> DispatchResult {
+        // Attempt dispatch on primary channel with timeout constraint
+        let primary_attempt = timeout(timeout_duration, self.dispatch(primary, payload.clone())).await;
+
+        match primary_attempt {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(_)) | Err(_) => {
+                // Primary delivery failed or timed out: Trigger fallback protocol automatically
+                self.dispatch(fallback, payload).await
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -65,7 +87,6 @@ mod tests {
             fallback_protocol: "Sms".to_string(),
         };
 
-        // Send multiple messages concurrently
         let d1 = dispatcher.dispatch(Protocol::Signal, payload.clone());
         let d2 = dispatcher.dispatch(Protocol::Matrix, payload.clone());
 
@@ -73,7 +94,6 @@ mod tests {
         assert!(res1.is_ok());
         assert!(res2.is_ok());
 
-        // Verify receiver gets them
         let r1 = receiver.recv().await.unwrap();
         let r2 = receiver.recv().await.unwrap();
 
@@ -82,7 +102,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_fallback_triggers() {
+    async fn test_dispatch_with_fallback_success() {
         let (dispatcher, mut receiver) = Dispatcher::new();
 
         let payload = MessagePayload {
@@ -91,21 +111,14 @@ mod tests {
             fallback_protocol: "Sms".to_string(),
         };
 
-        // Dispatch primary
-        let res = dispatcher.dispatch(Protocol::Signal, payload.clone()).await;
+        // When primary channel has capacity and succeeds within duration
+        let res = dispatcher
+            .dispatch_with_fallback(Protocol::Signal, Protocol::Sms, payload.clone(), Duration::from_millis(500))
+            .await;
         assert!(res.is_ok());
 
         let received = receiver.recv().await.unwrap();
         assert_eq!(received.0, Protocol::Signal);
-
-        // Simulate fallback logic (usually would be triggered by worker task timeout)
-        let simulated_timeout = true;
-        if simulated_timeout {
-            let res_fallback = dispatcher.dispatch(Protocol::Sms, payload).await;
-            assert!(res_fallback.is_ok());
-
-            let received_fallback = receiver.recv().await.unwrap();
-            assert_eq!(received_fallback.0, Protocol::Sms);
-        }
+        assert_eq!(received.1, payload);
     }
 }

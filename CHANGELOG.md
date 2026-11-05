@@ -2,4 +2,38 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
-- 0.1.0: Initial commit and core engine setup.
+- 0.3.6:
+  - Offline Outbox Queue: Implemented `OutboxManager`, `QueuedMessage`, and exponential backoff retry scheduling (`RetryPolicy`) in `omnicore-engine/src/outbox.rs`.
+  - Forward Secrecy Ratchet: Implemented `RatchetState` for advancing chain keys and forward secrecy index tracking.
+- 0.3.5:
+  - Standalone Power & Telemetry Daemon: Implemented `TelemetryCollector`, `PowerSource`, `BatteryStatus`, and `HardwareHealth` in `omnicore-engine/src/telemetry.rs` to support 24/7 standalone hardware routing appliances.
+- 0.3.4:
+  - VoIP & WebRTC Call Session Negotiation: Implemented `CallSession`, SDP offer/answer states, and ICE candidate exchange in `omnicore-engine/src/call.rs` for cross-protocol audio/video calls.
+- 0.3.3:
+  - Local P2P Peer Discovery: Added UDP beacon announcement and parsing module in `omnicore-engine/src/discovery.rs` for serverless local area network peer sync.
+- 0.3.2:
+  - iMessage Relay Bridge: Implemented `IMessageBridge` (`omnicore-engine/src/bridges/imessage.rs`) targeting macOS BlueBubbles REST API and local AppleScript integration.
+- 0.3.1:
+  - Cross-Bridge Integration: Implemented `BridgeRegistry` and `MultipathRouter` (`omnicore-engine/src/router.rs`) with sequential multi-protocol fallback cascades and verified with integration tests.
+- 0.3.0:
+  - Mobile Shell Architecture: Established cross-platform React Native / Expo application shell in `omnicore-mobile/` with conversation feeds, protocol badges, bridge telemetry, and daemon IPC abstractions.
+  - Cross-Platform Configuration: Updated `omnicore-ui/tauri.conf.json` with multi-target packaging rules, desktop sizing, and assets.
+- 0.2.3:
+  - Phase 2 Protocol Bridges: Implemented `SimpleXBridge` (`omnicore-engine/src/bridges/simplex.rs`) with unidirectional cryptographic queue routing.
+  - P2P Tox Transport: Implemented `ToxBridge` (`omnicore-engine/src/bridges/tox.rs`) with DHT bootstrap discovery and friend address dispatch.
+  - Cellular SMS Fallback: Implemented `SmsBridge` (`omnicore-engine/src/bridges/sms.rs`) with serial AT modem initialization and cellular fallback dispatch.
+- 0.2.2:
+  - SQLCipher Schema Specification: Authored comprehensive relational and security specification in `omnicore-engine/SCHEMA.md`.
+  - Database Hardening: Configured `cipher_page_size = 4096`, `kdf_iter = 256000`, and strict foreign key cascading enforcement.
+  - New Relational Tables: Added `threads` for chat sessions, `attachments` for encrypted media blobs, and `key_store` for cryptographic identity ratchets and platform session tokens.
+- 0.2.1:
+  - Core Engine Data Architecture: Added comprehensive domain models in `omnicore-engine/src/models.rs` (`ProtocolKind`, `DeliveryState`, `UnifiedContact`, `ProtocolMapping`, `ConversationMessage`, `RoutingStrategy`).
+  - Enhanced Encrypted Database Layer: Added indices, cascade constraints, sync token upsert, delivery state updating, and thread history retrieval in `omnicore-engine/src/db.rs`.
+  - Multi-Path Dispatch Fallback Engine: Added `dispatch_with_fallback` in `omnicore-engine/src/dispatcher.rs` supporting timeout and failure-triggered automatic rerouting.
+- 0.2.0:
+  - System Tray Integration: Native desktop tray icon, status monitor, and window show/hide toggles.
+  - Consolidated Dashboard: Unified single-page multi-pane interface organizing highest-value messaging, cross-protocol routing, identity management, and live bridge controls.
+  - Interactive Protocol Routing: Multi-protocol dispatching with automated fallback selection (Signal, Matrix, Discord, Simplex, SMS).
+  - Automation & Build Scripts: Added automated `scripts/build.sh`, `scripts/run.sh`, `scripts/dev.sh`, and `scripts/test.sh`.
+  - Comprehensive Tooltips & Explanations: Interactive badges and tooltips added across all UI elements explaining transport encryption and fallback paths.
+- 0.1.0: Initial commit, core engine setup, SQLCipher storage, and skeleton protocol bridges.
