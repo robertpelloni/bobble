@@ -43,7 +43,7 @@ interface SystemMetrics {
 }
 
 const DEFAULT_METRICS: SystemMetrics = {
-  version: '0.3.6',
+  version: '0.3.7',
   active_bridges: 4,
   queued_messages: 0,
   encryption: 'SQLCipher (AES-256-GCM)',
