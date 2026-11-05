@@ -8,3 +8,4 @@ pub mod discovery;
 pub mod call;
 pub mod telemetry;
 pub mod outbox;
+pub mod tor;

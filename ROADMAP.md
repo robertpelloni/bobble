@@ -26,6 +26,7 @@ Major, long-term structural milestones and structural plans.
 - WebRTC & Matrix VoIP cross-protocol call session negotiation (`call.rs`).
 - Standalone hardware appliance power and health telemetry (`telemetry.rs`).
 - Offline outbox queue with exponential backoff and forward secrecy ratchet (`outbox.rs`).
+- Tor onion service routing and SOCKS5 proxy adapter (`tor.rs`).
 
 ## Milestone 4: Cross-Platform Shells, LAN Discovery & Mobile Deployment (In Progress)
 - React Native / Expo mobile application shell (`omnicore-mobile/`).
