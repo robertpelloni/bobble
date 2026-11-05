@@ -7,3 +7,4 @@ pub mod router;
 pub mod discovery;
 pub mod call;
 pub mod telemetry;
+pub mod outbox;

@@ -2,6 +2,9 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.3.6:
+  - Offline Outbox Queue: Implemented `OutboxManager`, `QueuedMessage`, and exponential backoff retry scheduling (`RetryPolicy`) in `omnicore-engine/src/outbox.rs`.
+  - Forward Secrecy Ratchet: Implemented `RatchetState` for advancing chain keys and forward secrecy index tracking.
 - 0.3.5:
   - Standalone Power & Telemetry Daemon: Implemented `TelemetryCollector`, `PowerSource`, `BatteryStatus`, and `HardwareHealth` in `omnicore-engine/src/telemetry.rs` to support 24/7 standalone hardware routing appliances.
 - 0.3.4:
