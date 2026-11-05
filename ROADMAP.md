@@ -29,6 +29,7 @@ Major, long-term structural milestones and structural plans.
 - Tor onion service routing and SOCKS5 proxy adapter (`tor.rs`).
 - Decentralized cryptographic identity cards and signature verification (`identity.rs`).
 - Zero-knowledge encrypted cloud backup provider (`backup.rs`).
+- Federated group channel synchronization with causal vector clocks (`federation.rs`).
 
 ## Milestone 4: Cross-Platform Shells, LAN Discovery & Mobile Deployment (In Progress)
 - React Native / Expo mobile application shell (`omnicore-mobile/`).

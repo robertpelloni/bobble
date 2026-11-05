@@ -13,6 +13,7 @@ Ongoing internal architectural observations, codebase traits, and design prefere
   - SMS: Serial AT cellular modem transport for offline fallback (`sms.rs`).
   - iMessage: BlueBubbles REST API and AppleScript relay client (`imessage.rs`).
 - Bridge Integration: `BridgeRegistry` and `MultipathRouter` in `omnicore-engine/src/router.rs` managing dynamic multi-bridge dispatch with automated cascade fallback.
+- Federation & Multi-Party: `FederationManager` and `VectorClock` in `omnicore-engine/src/federation.rs` enabling decentralized group channel replication.
 - Cloud Backup: `ZeroKnowledgeBackup` in `omnicore-engine/src/backup.rs` managing client-side encrypted chunking and manifest generation.
 - Decentralized Identity: `IdentityCard` and `IdentityFingerprint` in `omnicore-engine/src/identity.rs` providing exportable, verifiable cryptographic identity cards.
 - Privacy & Anonymity: `TorManager` in `omnicore-engine/src/tor.rs` managing SOCKS5 proxy circuits and v3 .onion hidden service endpoints.
@@ -24,5 +25,5 @@ Ongoing internal architectural observations, codebase traits, and design prefere
 - Encrypted Storage: SQLCipher with AES-256-GCM encryption (`cipher_page_size=4096`, `kdf_iter=256000`, `foreign_keys=ON`). Schema includes `contacts`, `mappings`, `threads`, `messages`, `attachments`, `key_store`, and `sync_tokens`. Complete design documented in `omnicore-engine/SCHEMA.md`.
 - Dispatcher: Multi-path timeout fallback engine in `omnicore-engine/src/dispatcher.rs` executing concurrent queues and automated protocol fallback.
 - Desktop UI: React 19 + TypeScript + Vite + TailwindCSS running inside Tauri v2 shell with system tray controls.
-- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.3.9).
+- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.4.0).
 - Build Automation: Consolidated in `scripts/build.sh`, `scripts/run.sh`, `scripts/dev.sh`, and `scripts/test.sh`.
