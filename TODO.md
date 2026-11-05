@@ -34,4 +34,5 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Implement decentralized cryptographic identity card export and signature verification in `omnicore-engine/src/identity.rs`.
 - [x] Implement zero-knowledge encrypted cloud backup provider in `omnicore-engine/src/backup.rs`.
 - [x] Implement federated group channel state replication with causal vector clocks in `omnicore-engine/src/federation.rs`.
+- [x] Implement mobile shell settings with Tor, daemon connection, and cryptographic identity card management in `omnicore-mobile/src/screens/SettingsScreen.tsx`.
 - [ ] Add decentralized reputation scoring and spam defense heuristics.
