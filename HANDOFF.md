@@ -14,6 +14,9 @@ Summarize everything learned during the session that was not obvious at the star
   - SMS Cellular Modem (`sms.rs` AT serial driver)
   - iMessage Relay (`imessage.rs` BlueBubbles/AppleScript)
 - Bridge integration layer (`omnicore-engine/src/router.rs`) contains `BridgeRegistry` and `MultipathRouter` executing sequential fallback cascades.
+- Decentralized multi-party federation implemented in `omnicore-engine/src/federation.rs` with causal vector clocks.
+- Client-side zero-knowledge encrypted cloud backup provider implemented in `omnicore-engine/src/backup.rs`.
+- Decentralized identity card export and signature verification implemented in `omnicore-engine/src/identity.rs`.
 - Censorship resistance and privacy layer implemented in `omnicore-engine/src/tor.rs` via SOCKS5 proxy routing and v3 .onion hidden service endpoint validation.
 - Offline outbox queue with exponential backoff and forward secrecy ratchet state advancement implemented in `omnicore-engine/src/outbox.rs`.
 - Local P2P discovery layer implemented in `omnicore-engine/src/discovery.rs` for LAN peer announcements and zero-server sync.
@@ -23,4 +26,4 @@ Summarize everything learned during the session that was not obvious at the star
 - The desktop frontend UI was completely redesigned and consolidated into a high-value single-page multi-pane interface in React 19 + TypeScript + TailwindCSS.
 - Cross-platform mobile shell established in `omnicore-mobile/` using React Native / Expo, providing on-device conversation feeds, transport tags, and bridge telemetry.
 - Automation scripts were created in `scripts/`: `build.sh`, `test.sh`, `dev.sh`, `run.sh`.
-- Global version is governed by `VERSION.md` (0.3.7).
+- Global version is governed by `VERSION.md` (0.4.0).

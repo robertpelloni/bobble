@@ -2,6 +2,12 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.4.0:
+  - Federated Group Channels: Implemented `FederatedChannel`, causal `VectorClock`, membership lifecycle, and delta synchronization in `omnicore-engine/src/federation.rs` to replicate multi-party chat states across disparate networks without central servers.
+- 0.3.9:
+  - Zero-Knowledge Cloud Backup: Implemented `ZeroKnowledgeBackup`, `BackupManifest`, and `EncryptedChunk` in `omnicore-engine/src/backup.rs` supporting client-side encryption, chunking, and tamper detection.
+- 0.3.8:
+  - Cryptographic Identity Cards: Implemented `IdentityCard`, `IdentityFingerprint`, JSON serialization, and signature verification in `omnicore-engine/src/identity.rs` for decentralized contact sharing and QR verification.
 - 0.3.7:
   - Tor Onion Service & SOCKS5 Proxy Adapter: Implemented `TorManager`, `TorConfig`, `OnionEndpoint`, and v3 onion address validation in `omnicore-engine/src/tor.rs` for censorship-resistant, metadata-protected routing.
 - 0.3.6:
