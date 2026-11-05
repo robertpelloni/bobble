@@ -9,3 +9,4 @@ pub mod call;
 pub mod telemetry;
 pub mod outbox;
 pub mod tor;
+pub mod identity;

@@ -14,7 +14,7 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Implement native system tray icon and menu with server management in Tauri.
 - [x] Consolidate dashboard UI into an intuitive single-page multi-pane layout.
 - [x] Wire all backend bridges and metrics to frontend React dashboard.
-- [x] Standardize global version tracking via VERSION.md (v0.3.7).
+- [x] Standardize global version tracking via VERSION.md (v0.3.8).
 - [x] Organize build, dev, and test scripts in `scripts/`.
 - [x] Define domain models (`ProtocolKind`, `UnifiedContact`, `DeliveryState`) and thread querying in `omnicore-engine`.
 - [x] Implement automated timeout-driven fallback dispatching in `omnicore-engine`.
@@ -31,4 +31,5 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Implement standalone hardware power telemetry daemon in `omnicore-engine/src/telemetry.rs`.
 - [x] Implement offline outbox queue with exponential backoff and forward secrecy ratchet in `omnicore-engine/src/outbox.rs`.
 - [x] Implement Tor onion service routing and SOCKS5 proxy adapter in `omnicore-engine/src/tor.rs`.
-- [ ] Add decentralized contact cryptographic identity card export & QR code verification.
+- [x] Implement decentralized cryptographic identity card export and signature verification in `omnicore-engine/src/identity.rs`.
+- [ ] Add zero-knowledge encrypted cloud backup provider.

@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.3.8:
+  - Cryptographic Identity Cards: Implemented `IdentityCard`, `IdentityFingerprint`, JSON serialization, and signature verification in `omnicore-engine/src/identity.rs` for decentralized contact sharing and QR verification.
 - 0.3.7:
   - Tor Onion Service & SOCKS5 Proxy Adapter: Implemented `TorManager`, `TorConfig`, `OnionEndpoint`, and v3 onion address validation in `omnicore-engine/src/tor.rs` for censorship-resistant, metadata-protected routing.
 - 0.3.6:
