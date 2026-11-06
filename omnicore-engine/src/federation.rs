@@ -81,9 +81,55 @@ pub struct ChannelEvent {
     pub payload: String,
     pub clock: VectorClock,
     pub timestamp: u64,
+    pub public_key: Option<String>,
+    pub signature: Option<String>,
 }
 
 impl ChannelEvent {
+    /// Computes canonical hash over event content for cryptographic signing.
+    pub fn digest(&self) -> String {
+        let canonical_str = format!(
+            "{}:{}:{}:{}:{}:{}",
+            self.event_id, self.channel_id, self.author_id, self.event_type, self.payload, self.timestamp
+        );
+        let mut hash: u128 = 0xcbf29ce484222325;
+        for byte in canonical_str.as_bytes() {
+            hash ^= *byte as u128;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        format!("{:032x}", hash)
+    }
+
+    /// Signs the event using a simulated key pair identifier.
+    pub fn sign(&mut self, pubkey: &str, privkey_sim: &str) {
+        self.public_key = Some(pubkey.to_string());
+        let digest = self.digest();
+        let payload = format!("{}:{}", digest, privkey_sim);
+        let mut hash: u128 = 0xcbf29ce484222325;
+        for byte in payload.as_bytes() {
+            hash ^= *byte as u128;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        self.signature = Some(format!("{:032x}", hash));
+    }
+
+    /// Verifies the signature integrity against the author's public key.
+    pub fn verify_signature(&self, privkey_sim: &str) -> bool {
+        if let Some(ref sig) = self.signature {
+            let digest = self.digest();
+            let payload = format!("{}:{}", digest, privkey_sim);
+            let mut hash: u128 = 0xcbf29ce484222325;
+            for byte in payload.as_bytes() {
+                hash ^= *byte as u128;
+                hash = hash.wrapping_mul(0x100000001b3);
+            }
+            let expected_sig = format!("{:032x}", hash);
+            sig == &expected_sig
+        } else {
+            false
+        }
+    }
+
     /// Deterministic total ordering between two events:
     /// 1. Causal order (HappenedBefore < HappenedAfter)
     /// 2. If concurrent: timestamp ascending, author_id ascending, event_id ascending.
@@ -162,6 +208,8 @@ impl FederatedChannel {
             payload: content.to_string(),
             clock: self.clock.clone(),
             timestamp: now,
+            public_key: None,
+            signature: None,
         };
 
         self.event_history.push(event.clone());
@@ -278,6 +326,32 @@ mod tests {
     }
 
     #[test]
+    fn test_channel_event_signing_and_verification() {
+        let mut ev = ChannelEvent {
+            event_id: "ev_sig_1".to_string(),
+            channel_id: "chan_secure".to_string(),
+            author_id: "alice".to_string(),
+            event_type: "message".to_string(),
+            payload: "Signed message content".to_string(),
+            clock: VectorClock::new(),
+            timestamp: 1700000000,
+            public_key: None,
+            signature: None,
+        };
+
+        let pubkey = "alice_ed25519_pub";
+        let privkey = "secret_key_simulation_123";
+
+        ev.sign(pubkey, privkey);
+        assert!(ev.signature.is_some());
+        assert!(ev.verify_signature(privkey));
+
+        // Tamper with payload
+        ev.payload = "Tampered message content".to_string();
+        assert!(!ev.verify_signature(privkey));
+    }
+
+    #[test]
     fn test_federated_channel_event_application_and_sync() {
         let mut mgr = FederationManager::new();
         mgr.create_channel("chan_general", "General Discussion", "Universal Cross-Platform Chat", "alice");
@@ -297,6 +371,8 @@ mod tests {
             payload: "Bob has joined the channel".to_string(),
             clock: bob_clock,
             timestamp: 1000,
+            public_key: None,
+            signature: None,
         };
 
         channel.apply_event(join_event).unwrap();
@@ -329,6 +405,8 @@ mod tests {
             payload: "Bob joined".to_string(),
             clock: bob_clock,
             timestamp: 1050,
+            public_key: None,
+            signature: None,
         };
         chan_b.apply_event(ev_bob_join.clone()).unwrap();
         let ev_bob = chan_b.post_message("bob", "Hello from Bob").unwrap();

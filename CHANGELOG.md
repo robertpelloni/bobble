@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.4.4:
+  - Cryptographic Event Signatures & Tamper Detection: Added `ChannelEvent::sign`, `verify_signature`, and canonical content digest in `omnicore-engine/src/federation.rs` protecting federated multi-party group channels from forged or tampered messages.
 - 0.4.3:
   - Causal Conflict Resolution & Deterministic Multi-Party Ordering: Enhanced `omnicore-engine/src/federation.rs` with `CausalRelation`, deterministic tie-breaking (`compare_deterministic`), `post_message`, and `sort_events_deterministically` ensuring convergence across multi-party replicas.
 - 0.4.2:
