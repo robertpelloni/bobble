@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.4.6:
+  - Decentralized Key Ratchets & Pre-Key Bundles: Implemented `PreKeyBundle` and `RatchetSession` in `omnicore-engine/src/ratchet.rs` supporting forward secrecy message chain derivation and asynchronous pre-key bundle consumption.
 - 0.4.5:
   - WebSocket IPC Daemon Server: Implemented `WebSocketServer`, `ClientSession`, `DaemonRequest`, and `DaemonResponse` in `omnicore-engine/src/server.rs` providing bi-directional JSON-RPC IPC bridging desktop and mobile clients to the headless core engine.
 - 0.4.4:

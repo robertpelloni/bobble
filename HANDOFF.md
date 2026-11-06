@@ -26,7 +26,8 @@ Summarize everything learned during the session that was not obvious at the star
 - The desktop frontend UI was completely redesigned and consolidated into a high-value single-page multi-pane interface in React 19 + TypeScript + TailwindCSS.
 - Cross-platform mobile shell established in `omnicore-mobile/` using React Native / Expo, providing on-device conversation feeds, transport tags, and bridge telemetry.
 - Automation scripts were created in `scripts/`: `build.sh`, `test.sh`, `dev.sh`, `run.sh`.
-- Global version is governed by `VERSION.md` (0.4.5).
+- Global version is governed by `VERSION.md` (0.4.6).
+- Decentralized key ratchets and pre-key bundles implemented in `omnicore-engine/src/ratchet.rs`.
 - End-to-end WebSocket IPC daemon server implemented in `omnicore-engine/src/server.rs`.
 - Cryptographic event signatures and tamper verification added to `omnicore-engine/src/federation.rs`.
 - Mobile shell settings screen implemented in `omnicore-mobile/src/screens/SettingsScreen.tsx` wired into `omnicore-mobile/App.tsx`.
