@@ -2,6 +2,12 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.4.3:
+  - Causal Conflict Resolution & Deterministic Multi-Party Ordering: Enhanced `omnicore-engine/src/federation.rs` with `CausalRelation`, deterministic tie-breaking (`compare_deterministic`), `post_message`, and `sort_events_deterministically` ensuring convergence across multi-party replicas.
+- 0.4.2:
+  - Decentralized Reputation & Anti-Spam Heuristics: Implemented `ReputationEngine`, `TrustTier`, `PeerReputation`, and `SpamHeuristicFilter` in `omnicore-engine/src/reputation.rs` providing sliding-window rate limiting, cryptographic signature verification bonuses, delivery acknowledgment tracking, and blacklist enforcement.
+- 0.4.1:
+  - Mobile Shell Settings & Privacy Controls: Implemented `SettingsScreen.tsx` in `omnicore-mobile/src/screens/` and wired navigation tab in `omnicore-mobile/App.tsx` providing daemon endpoint configuration, Tor SOCKS5 routing toggles, .onion address display, Ed25519 identity card exports, and zero-knowledge backup synchronization.
 - 0.4.0:
   - Federated Group Channels: Implemented `FederatedChannel`, causal `VectorClock`, membership lifecycle, and delta synchronization in `omnicore-engine/src/federation.rs` to replicate multi-party chat states across disparate networks without central servers.
 - 0.3.9:

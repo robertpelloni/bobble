@@ -1,7 +1,16 @@
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CausalRelation {
+    Equal,
+    HappenedBefore,
+    HappenedAfter,
+    Concurrent,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct VectorClock {
@@ -38,6 +47,21 @@ impl VectorClock {
         }
         true
     }
+
+    pub fn compare(&self, other: &VectorClock) -> CausalRelation {
+        let self_ge = self.is_causally_newer_or_equal(other);
+        let other_ge = other.is_causally_newer_or_equal(self);
+
+        if self_ge && other_ge {
+            CausalRelation::Equal
+        } else if self_ge {
+            CausalRelation::HappenedAfter
+        } else if other_ge {
+            CausalRelation::HappenedBefore
+        } else {
+            CausalRelation::Concurrent
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,7 +72,7 @@ pub struct ChannelMember {
     pub joined_at: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ChannelEvent {
     pub event_id: String,
     pub channel_id: String,
@@ -57,6 +81,24 @@ pub struct ChannelEvent {
     pub payload: String,
     pub clock: VectorClock,
     pub timestamp: u64,
+}
+
+impl ChannelEvent {
+    /// Deterministic total ordering between two events:
+    /// 1. Causal order (HappenedBefore < HappenedAfter)
+    /// 2. If concurrent: timestamp ascending, author_id ascending, event_id ascending.
+    pub fn compare_deterministic(&self, other: &ChannelEvent) -> Ordering {
+        match self.clock.compare(&other.clock) {
+            CausalRelation::HappenedBefore => Ordering::Less,
+            CausalRelation::HappenedAfter => Ordering::Greater,
+            CausalRelation::Equal | CausalRelation::Concurrent => {
+                self.timestamp
+                    .cmp(&other.timestamp)
+                    .then_with(|| self.author_id.cmp(&other.author_id))
+                    .then_with(|| self.event_id.cmp(&other.event_id))
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,6 +142,32 @@ impl FederatedChannel {
         }
     }
 
+    /// Author and post a new message from a local channel member.
+    pub fn post_message(&mut self, author_id: &str, content: &str) -> Result<ChannelEvent> {
+        if !self.members.contains_key(author_id) {
+            return Err(anyhow!("Author is not an active channel member"));
+        }
+
+        self.clock.increment(author_id);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let event = ChannelEvent {
+            event_id: format!("ev_{}_{}", author_id, self.event_history.len() + 1),
+            channel_id: self.channel_id.clone(),
+            author_id: author_id.to_string(),
+            event_type: "message".to_string(),
+            payload: content.to_string(),
+            clock: self.clock.clone(),
+            timestamp: now,
+        };
+
+        self.event_history.push(event.clone());
+        Ok(event)
+    }
+
     pub fn apply_event(&mut self, event: ChannelEvent) -> Result<()> {
         if event.channel_id != self.channel_id {
             return Err(anyhow!("Channel ID mismatch"));
@@ -129,7 +197,14 @@ impl FederatedChannel {
         }
 
         self.event_history.push(event);
+        self.sort_events_deterministically();
         Ok(())
+    }
+
+    /// Sorts all channel events into a deterministically converged log across all replicas.
+    pub fn sort_events_deterministically(&mut self) {
+        self.event_history
+            .sort_by(|a, b| a.compare_deterministic(b));
     }
 
     pub fn get_missing_events(&self, remote_clock: &VectorClock) -> Vec<ChannelEvent> {
@@ -190,8 +265,12 @@ mod tests {
         let mut c2 = c1.clone();
         c2.increment("bob");
 
-        assert!(c2.is_causally_newer_or_equal(&c1));
-        assert!(!c1.is_causally_newer_or_equal(&c2));
+        assert_eq!(c1.compare(&c2), CausalRelation::HappenedBefore);
+        assert_eq!(c2.compare(&c1), CausalRelation::HappenedAfter);
+
+        let mut c3 = VectorClock::new();
+        c3.increment("charlie");
+        assert_eq!(c1.compare(&c3), CausalRelation::Concurrent);
 
         c1.merge(&c2);
         assert_eq!(c1.clocks.get("bob"), Some(&1));
@@ -229,5 +308,40 @@ mod tests {
         let missing = channel.get_missing_events(&empty_clock);
         assert_eq!(missing.len(), 1);
         assert_eq!(missing[0].event_id, "ev_1");
+    }
+
+    #[test]
+    fn test_concurrent_conflict_resolution_convergence() {
+        let mut chan_a = FederatedChannel::new("chan_1", "Sync Room", "Topic", "alice");
+        let mut chan_b = chan_a.clone();
+
+        // Alice sends message on chan_a
+        let ev_alice = chan_a.post_message("alice", "Hello from Alice").unwrap();
+
+        // Bob joins and sends message on chan_b concurrently
+        let mut bob_clock = chan_b.clock.clone();
+        bob_clock.increment("bob");
+        let ev_bob_join = ChannelEvent {
+            event_id: "ev_bob_join".to_string(),
+            channel_id: "chan_1".to_string(),
+            author_id: "bob".to_string(),
+            event_type: "member_join".to_string(),
+            payload: "Bob joined".to_string(),
+            clock: bob_clock,
+            timestamp: 1050,
+        };
+        chan_b.apply_event(ev_bob_join.clone()).unwrap();
+        let ev_bob = chan_b.post_message("bob", "Hello from Bob").unwrap();
+
+        // Exchange events between replicas
+        chan_a.apply_event(ev_bob_join).unwrap();
+        chan_a.apply_event(ev_bob).unwrap();
+        chan_b.apply_event(ev_alice).unwrap();
+
+        // Verify both replicas have identical converged event histories
+        assert_eq!(chan_a.event_history.len(), chan_b.event_history.len());
+        for (ea, eb) in chan_a.event_history.iter().zip(chan_b.event_history.iter()) {
+            assert_eq!(ea.event_id, eb.event_id);
+        }
     }
 }

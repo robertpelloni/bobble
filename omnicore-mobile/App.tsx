@@ -2,15 +2,18 @@ import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, StatusBar } from 'react-native';
 import { ConversationScreen } from './src/screens/ConversationScreen';
 import { BridgeDeckScreen } from './src/screens/BridgeDeckScreen';
+import { SettingsScreen } from './src/screens/SettingsScreen';
 
 export default function App() {
-  const [currentTab, setCurrentTab] = useState<'chat' | 'bridges'>('chat');
+  const [currentTab, setCurrentTab] = useState<'chat' | 'bridges' | 'settings'>('chat');
 
   return (
     <View style={styles.appContainer}>
       <StatusBar barStyle="light-content" backgroundColor="#020617" />
       <View style={styles.contentContainer}>
-        {currentTab === 'chat' ? <ConversationScreen /> : <BridgeDeckScreen />}
+        {currentTab === 'chat' && <ConversationScreen />}
+        {currentTab === 'bridges' && <BridgeDeckScreen />}
+        {currentTab === 'settings' && <SettingsScreen />}
       </View>
       <View style={styles.bottomNav}>
         <TouchableOpacity
@@ -27,6 +30,14 @@ export default function App() {
         >
           <Text style={[styles.navText, currentTab === 'bridges' && styles.navTextActive]}>
             🔌 Bridges
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.navButton, currentTab === 'settings' && styles.navButtonActive]}
+          onPress={() => setCurrentTab('settings')}
+        >
+          <Text style={[styles.navText, currentTab === 'settings' && styles.navTextActive]}>
+            ⚙️ Settings
           </Text>
         </TouchableOpacity>
       </View>
