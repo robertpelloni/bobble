@@ -422,4 +422,86 @@ mod tests {
             assert_eq!(ea.event_id, eb.event_id);
         }
     }
+
+    #[test]
+    fn test_cross_platform_federated_sync_and_delivery() {
+        let mut node_signal = FederationManager::new();
+        let mut node_matrix = FederationManager::new();
+        let mut node_simplex = FederationManager::new();
+
+        // 1. Initialize channel on node_signal with Alice as creator
+        node_signal.create_channel("chan_cross_net", "Global Devs", "Multi-bridge Chat", "alice");
+
+        // 2. Alice sends an initial message
+        let chan = node_signal.get_channel_mut("chan_cross_net").unwrap();
+        let mut msg1 = chan.post_message("alice", "Bridge sync test started").unwrap();
+        msg1.sign("alice_pub", "alice_priv_key");
+
+        // 3. Matrix node synchronizes channel creation and Alice's message
+        node_matrix.create_channel("chan_cross_net", "Global Devs", "Multi-bridge Chat", "alice");
+        let applied_matrix = node_matrix
+            .sync_channel_events("chan_cross_net", vec![msg1.clone()])
+            .unwrap();
+        assert_eq!(applied_matrix, 1);
+
+        // 4. Bob joins from Matrix node and replies
+        let chan_m = node_matrix.get_channel_mut("chan_cross_net").unwrap();
+        let mut bob_clock = chan_m.clock.clone();
+        bob_clock.increment("bob");
+        let mut join_bob = ChannelEvent {
+            event_id: "ev_bob_join_matrix".to_string(),
+            channel_id: "chan_cross_net".to_string(),
+            author_id: "bob".to_string(),
+            event_type: "member_join".to_string(),
+            payload: "Bob joined via Matrix".to_string(),
+            clock: bob_clock,
+            timestamp: 2000,
+            public_key: None,
+            signature: None,
+        };
+        join_bob.sign("bob_pub", "bob_priv_key");
+        chan_m.apply_event(join_bob.clone()).unwrap();
+
+        let mut msg2 = chan_m.post_message("bob", "ACK from Matrix bridge").unwrap();
+        msg2.sign("bob_pub", "bob_priv_key");
+        // Update signed event in chan_m history so missing events contains the signature
+        if let Some(last) = chan_m.event_history.last_mut() {
+            *last = msg2.clone();
+        }
+
+        // 5. SimpleX node syncs all missing events from Matrix
+        node_simplex.create_channel("chan_cross_net", "Global Devs", "Multi-bridge Chat", "alice");
+        let chan_s = node_simplex.get_channel("chan_cross_net").unwrap();
+        let missing_for_simplex = chan_m.get_missing_events(&chan_s.clock);
+        assert_eq!(missing_for_simplex.len(), 3); // msg1, join_bob, msg2
+
+        let applied_simplex = node_simplex
+            .sync_channel_events("chan_cross_net", missing_for_simplex)
+            .unwrap();
+        assert_eq!(applied_simplex, 3);
+
+        // 6. Node Signal receives Bob's join and reply from Matrix
+        let chan_sig = node_signal.get_channel_mut("chan_cross_net").unwrap();
+        chan_sig.apply_event(join_bob).unwrap();
+        chan_sig.apply_event(msg2).unwrap();
+
+        // 7. Verify all three platform nodes have identical converged histories and verified signatures
+        let hist_sig = &node_signal.get_channel("chan_cross_net").unwrap().event_history;
+        let hist_mat = &node_matrix.get_channel("chan_cross_net").unwrap().event_history;
+        let hist_smp = &node_simplex.get_channel("chan_cross_net").unwrap().event_history;
+
+        assert_eq!(hist_sig.len(), 3);
+        assert_eq!(hist_mat.len(), 3);
+        assert_eq!(hist_smp.len(), 3);
+
+        for i in 0..3 {
+            assert_eq!(hist_sig[i].event_id, hist_mat[i].event_id);
+            assert_eq!(hist_mat[i].event_id, hist_smp[i].event_id);
+        }
+
+        // Verify signatures of delivered messages
+        assert!(hist_smp[0].verify_signature("alice_priv_key"));
+        assert!(hist_smp[1].verify_signature("bob_priv_key"));
+        assert!(hist_smp[2].verify_signature("bob_priv_key"));
+    }
 }
