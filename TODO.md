@@ -36,4 +36,5 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Implement federated group channel state replication with causal vector clocks in `omnicore-engine/src/federation.rs`.
 - [x] Implement mobile shell settings with Tor, daemon connection, and cryptographic identity card management in `omnicore-mobile/src/screens/SettingsScreen.tsx`.
 - [x] Add decentralized reputation scoring and spam defense heuristics in `omnicore-engine/src/reputation.rs`.
-- [ ] Implement end-to-end WebSocket proxy bridge connecting omnicore-mobile and omnicore-ui to omnicore-engine daemon.
+- [x] Implement end-to-end WebSocket proxy bridge connecting omnicore-mobile and omnicore-ui to omnicore-engine daemon in `omnicore-engine/src/server.rs`.
+- [ ] Implement decentralized key ratchets and pre-key bundles in `omnicore-engine/src/ratchet.rs`.
