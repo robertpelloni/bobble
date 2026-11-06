@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.4.7:
+  - Multi-Tier Protocol Fallback Cascades: Added comprehensive 3-tier fallback cascade integration tests and candidate exhaustion failure testing in `omnicore-engine/src/router.rs`, with `active_bridge_count` and `available_protocols` queries on `BridgeRegistry`.
 - 0.4.6:
   - Decentralized Key Ratchets & Pre-Key Bundles: Implemented `PreKeyBundle` and `RatchetSession` in `omnicore-engine/src/ratchet.rs` supporting forward secrecy message chain derivation and asynchronous pre-key bundle consumption.
 - 0.4.5:

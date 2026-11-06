@@ -25,7 +25,8 @@ Ongoing internal architectural observations, codebase traits, and design prefere
 - Encrypted Storage: SQLCipher with AES-256-GCM encryption (`cipher_page_size=4096`, `kdf_iter=256000`, `foreign_keys=ON`). Schema includes `contacts`, `mappings`, `threads`, `messages`, `attachments`, `key_store`, and `sync_tokens`. Complete design documented in `omnicore-engine/SCHEMA.md`.
 - Dispatcher: Multi-path timeout fallback engine in `omnicore-engine/src/dispatcher.rs` executing concurrent queues and automated protocol fallback.
 - Desktop UI: React 19 + TypeScript + Vite + TailwindCSS running inside Tauri v2 shell with system tray controls.
-- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.4.6).
+- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.4.7).
+- Multipath Router Cascades: `omnicore-engine/src/router.rs` handles dynamic 3-tier fallback chains across protocol bridges (e.g., Signal -> Matrix -> SMS) with exhaustive fallback recovery.
 - Decentralized Ratchets: `omnicore-engine/src/ratchet.rs` implements `PreKeyBundle` and `RatchetSession` for forward-secure, asynchronous message chain key derivation.
 - WebSocket Daemon IPC: `omnicore-engine/src/server.rs` implements asynchronous JSON-RPC protocol bridging desktop and mobile clients to the headless daemon.
 - Federated Event Integrity: `omnicore-engine/src/federation.rs` implements canonical event hashing (`digest`), signing (`sign`), and signature verification (`verify_signature`) to reject forged federated events.
