@@ -25,7 +25,8 @@ Ongoing internal architectural observations, codebase traits, and design prefere
 - Encrypted Storage: SQLCipher with AES-256-GCM encryption (`cipher_page_size=4096`, `kdf_iter=256000`, `foreign_keys=ON`). Schema includes `contacts`, `mappings`, `threads`, `messages`, `attachments`, `key_store`, and `sync_tokens`. Complete design documented in `omnicore-engine/SCHEMA.md`.
 - Dispatcher: Multi-path timeout fallback engine in `omnicore-engine/src/dispatcher.rs` executing concurrent queues and automated protocol fallback.
 - Desktop UI: React 19 + TypeScript + Vite + TailwindCSS running inside Tauri v2 shell with system tray controls.
-- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.4.2).
+- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.4.3).
 - Build Automation: Consolidated in `scripts/build.sh`, `scripts/run.sh`, `scripts/dev.sh`, and `scripts/test.sh`.
 - Mobile Shell Settings: `omnicore-mobile/src/screens/SettingsScreen.tsx` provides mobile interface for Tor routing, engine daemon endpoint, identity cards, and zero-knowledge backups.
 - Reputation & Anti-Spam: `omnicore-engine/src/reputation.rs` implements sliding-window rate limiting, cryptographic signature verification rewards, delivery acknowledgment tracking, and blacklist enforcement.
+- Causal Ordering & Conflict Resolution: `omnicore-engine/src/federation.rs` implements `CausalRelation` and deterministic tie-breaking (`compare_deterministic`, `sort_events_deterministically`) for decentralized multi-replica convergence.

@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.4.3:
+  - Causal Conflict Resolution & Deterministic Multi-Party Ordering: Enhanced `omnicore-engine/src/federation.rs` with `CausalRelation`, deterministic tie-breaking (`compare_deterministic`), `post_message`, and `sort_events_deterministically` ensuring convergence across multi-party replicas.
 - 0.4.2:
   - Decentralized Reputation & Anti-Spam Heuristics: Implemented `ReputationEngine`, `TrustTier`, `PeerReputation`, and `SpamHeuristicFilter` in `omnicore-engine/src/reputation.rs` providing sliding-window rate limiting, cryptographic signature verification bonuses, delivery acknowledgment tracking, and blacklist enforcement.
 - 0.4.1:
