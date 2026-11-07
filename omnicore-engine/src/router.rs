@@ -7,19 +7,30 @@ use crate::bridge::ProtocolBridge;
 use crate::dispatcher::MessagePayload;
 use crate::models::{DeliveryState, ProtocolKind};
 
+#[derive(Debug, Clone, Default)]
+pub struct ProtocolMetric {
+    pub total_attempts: u32,
+    pub successful_attempts: u32,
+    pub average_latency_ms: u64,
+    pub consecutive_failures: u32,
+}
+
 pub struct BridgeRegistry {
     bridges: HashMap<ProtocolKind, Arc<RwLock<Box<dyn ProtocolBridge>>>>,
+    metrics: HashMap<ProtocolKind, ProtocolMetric>,
 }
 
 impl BridgeRegistry {
     pub fn new() -> Self {
         Self {
             bridges: HashMap::new(),
+            metrics: HashMap::new(),
         }
     }
 
     pub fn register(&mut self, protocol: ProtocolKind, bridge: Box<dyn ProtocolBridge>) {
         self.bridges.insert(protocol, Arc::new(RwLock::new(bridge)));
+        self.metrics.entry(protocol).or_default();
     }
 
     pub fn get(&self, protocol: ProtocolKind) -> Option<Arc<RwLock<Box<dyn ProtocolBridge>>>> {
@@ -32,6 +43,63 @@ impl BridgeRegistry {
 
     pub fn available_protocols(&self) -> Vec<ProtocolKind> {
         self.bridges.keys().copied().collect()
+    }
+
+    /// Records delivery outcome and latency to adjust route optimization.
+    pub fn record_delivery_metrics(&mut self, protocol: ProtocolKind, latency_ms: u64, success: bool) {
+        let m = self.metrics.entry(protocol).or_default();
+        m.total_attempts += 1;
+        if success {
+            m.successful_attempts += 1;
+            m.consecutive_failures = 0;
+            // Exponential moving average for latency
+            if m.average_latency_ms == 0 {
+                m.average_latency_ms = latency_ms;
+            } else {
+                m.average_latency_ms = (m.average_latency_ms * 7 + latency_ms * 3) / 10;
+            }
+        } else {
+            m.consecutive_failures += 1;
+        }
+    }
+
+    pub fn get_metrics(&self, protocol: ProtocolKind) -> Option<&ProtocolMetric> {
+        self.metrics.get(&protocol)
+    }
+
+    /// Selects optimal primary and reordered fallback candidates according to bridge health.
+    pub fn select_optimal_route(
+        &self,
+        primary: ProtocolKind,
+        fallbacks: &[ProtocolKind],
+    ) -> (ProtocolKind, Vec<ProtocolKind>) {
+        let mut candidates = vec![primary];
+        for &fb in fallbacks {
+            if !candidates.contains(&fb) {
+                candidates.push(fb);
+            }
+        }
+
+        // Sort candidates: healthy bridges first (low consecutive failures), then by latency
+        candidates.sort_by(|a, b| {
+            let m_a = self.metrics.get(a);
+            let m_b = self.metrics.get(b);
+
+            let fail_a = m_a.map(|m| m.consecutive_failures).unwrap_or(0);
+            let fail_b = m_b.map(|m| m.consecutive_failures).unwrap_or(0);
+
+            if fail_a != fail_b {
+                fail_a.cmp(&fail_b)
+            } else {
+                let lat_a = m_a.map(|m| m.average_latency_ms).unwrap_or(u64::MAX);
+                let lat_b = m_b.map(|m| m.average_latency_ms).unwrap_or(u64::MAX);
+                lat_a.cmp(&lat_b)
+            }
+        });
+
+        let chosen_primary = candidates[0];
+        let remaining_fallbacks = candidates[1..].to_vec();
+        (chosen_primary, remaining_fallbacks)
     }
 }
 
@@ -320,5 +388,50 @@ mod tests {
             }
             _ => panic!("Expected FallbackTriggered delivery state"),
         }
+    }
+
+    #[test]
+    fn test_adaptive_latency_route_selection() {
+        let mut registry = BridgeRegistry::new();
+        registry.register(ProtocolKind::Signal, Box::new(crate::bridges::signal::SignalBridge::new()));
+        registry.register(ProtocolKind::Matrix, Box::new(crate::bridges::matrix::MatrixBridge::new()));
+        registry.register(ProtocolKind::Sms, Box::new(crate::bridges::sms::SmsBridge::new()));
+
+        // Signal: low latency (15ms)
+        registry.record_delivery_metrics(ProtocolKind::Signal, 15, true);
+        // Matrix: higher latency (80ms)
+        registry.record_delivery_metrics(ProtocolKind::Matrix, 80, true);
+        // SMS: high latency (120ms)
+        registry.record_delivery_metrics(ProtocolKind::Sms, 120, true);
+
+        let (primary, fallbacks) = registry.select_optimal_route(
+            ProtocolKind::Matrix,
+            &[ProtocolKind::Sms, ProtocolKind::Signal],
+        );
+
+        // Signal has lower latency so it should be promoted to primary
+        assert_eq!(primary, ProtocolKind::Signal);
+        assert_eq!(fallbacks[0], ProtocolKind::Matrix);
+        assert_eq!(fallbacks[1], ProtocolKind::Sms);
+    }
+
+    #[test]
+    fn test_unhealthy_bridge_dynamic_deprioritization() {
+        let mut registry = BridgeRegistry::new();
+        registry.register(ProtocolKind::Signal, Box::new(crate::bridges::signal::SignalBridge::new()));
+        registry.register(ProtocolKind::Matrix, Box::new(crate::bridges::matrix::MatrixBridge::new()));
+
+        // Signal experiences consecutive failures
+        registry.record_delivery_metrics(ProtocolKind::Signal, 10, false);
+        registry.record_delivery_metrics(ProtocolKind::Signal, 10, false);
+
+        // Matrix is healthy
+        registry.record_delivery_metrics(ProtocolKind::Matrix, 50, true);
+
+        let (primary, fallbacks) = registry.select_optimal_route(ProtocolKind::Signal, &[ProtocolKind::Matrix]);
+
+        // Unhealthy Signal is deprioritized; healthy Matrix is chosen first
+        assert_eq!(primary, ProtocolKind::Matrix);
+        assert_eq!(fallbacks, vec![ProtocolKind::Signal]);
     }
 }

@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.5.7:
+  - Multi-Protocol Adaptive Latency Routing: Implemented `ProtocolMetric`, `record_delivery_metrics`, and `select_optimal_route` in `omnicore-engine/src/router.rs` dynamically reordering routing cascades according to real-time latency and bridge health.
 - 0.5.6:
   - Diverse Multipath Routing Fallback Scenarios: Added integration tests for P2P Tox DHT failover to cellular SMS and SimpleX cryptographic queue failover to Matrix homeserver in `omnicore-engine/src/router.rs`.
 - 0.5.5:
