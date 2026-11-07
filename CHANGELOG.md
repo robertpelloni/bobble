@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.5.3:
+  - Protocol Bridge Reliability Hardening: Refined `MatrixBridge` and `DiscordBridge` with retry policies, input validation (empty content/recipient checks), and `is_connected` status queries.
 - 0.5.2:
   - README Architectural Blueprint & Spec Update: Overhauled root `README.md` to thoroughly document the active headless Rust core engine architecture, SQLCipher schema, multi-path fallback router, mobile/desktop shells, and automation scripts.
 - 0.5.1:
