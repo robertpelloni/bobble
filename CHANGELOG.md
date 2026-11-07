@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.5.8:
+  - Circuit-Breaker Fault Tolerance: Implemented `CircuitState` (Closed, Open, HalfOpen) and automated cooldown probing in `omnicore-engine/src/router.rs` to bypass failing bridges during network outages and prevent timeout cascading delays.
 - 0.5.7:
   - Multi-Protocol Adaptive Latency Routing: Implemented `ProtocolMetric`, `record_delivery_metrics`, and `select_optimal_route` in `omnicore-engine/src/router.rs` dynamically reordering routing cascades according to real-time latency and bridge health.
 - 0.5.6:

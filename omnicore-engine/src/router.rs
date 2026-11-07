@@ -7,12 +7,55 @@ use crate::bridge::ProtocolBridge;
 use crate::dispatcher::MessagePayload;
 use crate::models::{DeliveryState, ProtocolKind};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CircuitState {
+    Closed,   // Normal operation, all traffic passes
+    Open,     // Tripped, bypass bridge to prevent timeout blocking
+    HalfOpen, // Probing after cooldown
+}
+
+#[derive(Debug, Clone)]
 pub struct ProtocolMetric {
     pub total_attempts: u32,
     pub successful_attempts: u32,
     pub average_latency_ms: u64,
     pub consecutive_failures: u32,
+    pub circuit_state: CircuitState,
+    pub last_failure_epoch_sec: u64,
+    pub failure_threshold: u32,
+    pub cooldown_sec: u64,
+}
+
+impl Default for ProtocolMetric {
+    fn default() -> Self {
+        Self {
+            total_attempts: 0,
+            successful_attempts: 0,
+            average_latency_ms: 0,
+            consecutive_failures: 0,
+            circuit_state: CircuitState::Closed,
+            last_failure_epoch_sec: 0,
+            failure_threshold: 3,
+            cooldown_sec: 30,
+        }
+    }
+}
+
+impl ProtocolMetric {
+    pub fn is_available_at(&mut self, now_epoch: u64) -> bool {
+        match self.circuit_state {
+            CircuitState::Closed => true,
+            CircuitState::Open => {
+                if now_epoch >= self.last_failure_epoch_sec.saturating_add(self.cooldown_sec) {
+                    self.circuit_state = CircuitState::HalfOpen;
+                    true
+                } else {
+                    false
+                }
+            }
+            CircuitState::HalfOpen => true,
+        }
+    }
 }
 
 pub struct BridgeRegistry {
@@ -45,14 +88,14 @@ impl BridgeRegistry {
         self.bridges.keys().copied().collect()
     }
 
-    /// Records delivery outcome and latency to adjust route optimization.
-    pub fn record_delivery_metrics(&mut self, protocol: ProtocolKind, latency_ms: u64, success: bool) {
+    /// Records delivery outcome and latency to adjust route optimization and circuit-breaker state.
+    pub fn record_delivery_metrics(&mut self, protocol: ProtocolKind, latency_ms: u64, success: bool, now_epoch: u64) {
         let m = self.metrics.entry(protocol).or_default();
         m.total_attempts += 1;
         if success {
             m.successful_attempts += 1;
             m.consecutive_failures = 0;
-            // Exponential moving average for latency
+            m.circuit_state = CircuitState::Closed;
             if m.average_latency_ms == 0 {
                 m.average_latency_ms = latency_ms;
             } else {
@@ -60,6 +103,10 @@ impl BridgeRegistry {
             }
         } else {
             m.consecutive_failures += 1;
+            m.last_failure_epoch_sec = now_epoch;
+            if m.consecutive_failures >= m.failure_threshold {
+                m.circuit_state = CircuitState::Open;
+            }
         }
     }
 
@@ -397,12 +444,13 @@ mod tests {
         registry.register(ProtocolKind::Matrix, Box::new(crate::bridges::matrix::MatrixBridge::new()));
         registry.register(ProtocolKind::Sms, Box::new(crate::bridges::sms::SmsBridge::new()));
 
+        let now = 1700000000;
         // Signal: low latency (15ms)
-        registry.record_delivery_metrics(ProtocolKind::Signal, 15, true);
+        registry.record_delivery_metrics(ProtocolKind::Signal, 15, true, now);
         // Matrix: higher latency (80ms)
-        registry.record_delivery_metrics(ProtocolKind::Matrix, 80, true);
+        registry.record_delivery_metrics(ProtocolKind::Matrix, 80, true, now);
         // SMS: high latency (120ms)
-        registry.record_delivery_metrics(ProtocolKind::Sms, 120, true);
+        registry.record_delivery_metrics(ProtocolKind::Sms, 120, true, now);
 
         let (primary, fallbacks) = registry.select_optimal_route(
             ProtocolKind::Matrix,
@@ -421,17 +469,57 @@ mod tests {
         registry.register(ProtocolKind::Signal, Box::new(crate::bridges::signal::SignalBridge::new()));
         registry.register(ProtocolKind::Matrix, Box::new(crate::bridges::matrix::MatrixBridge::new()));
 
+        let now = 1700000000;
         // Signal experiences consecutive failures
-        registry.record_delivery_metrics(ProtocolKind::Signal, 10, false);
-        registry.record_delivery_metrics(ProtocolKind::Signal, 10, false);
+        registry.record_delivery_metrics(ProtocolKind::Signal, 10, false, now);
+        registry.record_delivery_metrics(ProtocolKind::Signal, 10, false, now);
 
         // Matrix is healthy
-        registry.record_delivery_metrics(ProtocolKind::Matrix, 50, true);
+        registry.record_delivery_metrics(ProtocolKind::Matrix, 50, true, now);
 
         let (primary, fallbacks) = registry.select_optimal_route(ProtocolKind::Signal, &[ProtocolKind::Matrix]);
 
         // Unhealthy Signal is deprioritized; healthy Matrix is chosen first
         assert_eq!(primary, ProtocolKind::Matrix);
         assert_eq!(fallbacks, vec![ProtocolKind::Signal]);
+    }
+
+    #[test]
+    fn test_circuit_breaker_bypasses_open_bridge() {
+        let mut metric = ProtocolMetric {
+            failure_threshold: 3,
+            cooldown_sec: 20,
+            ..Default::default()
+        };
+
+        let now = 1700000000;
+        assert_eq!(metric.circuit_state, CircuitState::Closed);
+        assert!(metric.is_available_at(now));
+
+        // Simulate 3 failures to trip the circuit
+        metric.consecutive_failures = 3;
+        metric.last_failure_epoch_sec = now;
+        metric.circuit_state = CircuitState::Open;
+
+        // Immediately after, bridge should be bypassed (not available)
+        assert!(!metric.is_available_at(now + 5));
+        assert_eq!(metric.circuit_state, CircuitState::Open);
+    }
+
+    #[test]
+    fn test_circuit_breaker_half_open_recovery() {
+        let mut metric = ProtocolMetric {
+            failure_threshold: 3,
+            cooldown_sec: 20,
+            consecutive_failures: 3,
+            last_failure_epoch_sec: 1700000000,
+            circuit_state: CircuitState::Open,
+            ..Default::default()
+        };
+
+        let post_cooldown = 1700000025;
+        // After cooldown expires, circuit moves to HalfOpen to probe recovery
+        assert!(metric.is_available_at(post_cooldown));
+        assert_eq!(metric.circuit_state, CircuitState::HalfOpen);
     }
 }

@@ -25,7 +25,8 @@ Ongoing internal architectural observations, codebase traits, and design prefere
 - Encrypted Storage: SQLCipher with AES-256-GCM encryption (`cipher_page_size=4096`, `kdf_iter=256000`, `foreign_keys=ON`). Schema includes `contacts`, `mappings`, `threads`, `messages`, `attachments`, `key_store`, and `sync_tokens`. Complete design documented in `omnicore-engine/SCHEMA.md`.
 - Dispatcher: Multi-path timeout fallback engine in `omnicore-engine/src/dispatcher.rs` executing concurrent queues and automated protocol fallback.
 - Desktop UI: React 19 + TypeScript + Vite + TailwindCSS running inside Tauri v2 shell with system tray controls.
-- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.5.7).
+- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.5.8).
+- Circuit Breaker: `omnicore-engine/src/router.rs` implements `CircuitState` (Closed, Open, HalfOpen) to bypass offline transports without incurring repeated delivery timeout penalties.
 - Adaptive Latency Routing: `omnicore-engine/src/router.rs` records delivery metrics and dynamically promotes lowest-latency, healthiest bridges via `select_optimal_route`.
 - Multipath Scenarios: `omnicore-engine/src/router.rs` tests verify Tox-to-SMS and SimpleX-to-Matrix fallback cascades under network partitions.
 - Ratchet Storage Persistence: `omnicore-engine/src/ratchet.rs` persists forward-secrecy session states into SQLCipher `key_store` (`persist_to_db`, `load_from_db`) and generates ephemeral pre-key bundles.
