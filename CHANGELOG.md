@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.5.2:
+  - README Architectural Blueprint & Spec Update: Overhauled root `README.md` to thoroughly document the active headless Rust core engine architecture, SQLCipher schema, multi-path fallback router, mobile/desktop shells, and automation scripts.
 - 0.5.1:
   - Federated Bridge Gateway & Broadcast Routing: Implemented `broadcast_event_via_router` on `FederationManager` in `omnicore-engine/src/federation.rs` to route multi-party channel events through `MultipathRouter` with automatic cascade fallback delivery.
 - 0.5.0:
