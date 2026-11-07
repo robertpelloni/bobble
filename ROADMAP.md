@@ -31,7 +31,13 @@ Major, long-term structural milestones and structural plans.
 - Zero-knowledge encrypted cloud backup provider (`backup.rs`).
 - Federated group channel synchronization with causal vector clocks (`federation.rs`).
 
-## Milestone 4: Cross-Platform Shells, LAN Discovery & Mobile Deployment (In Progress)
+## Milestone 4: Cross-Platform Shells, LAN Discovery & Mobile Deployment (Completed)
 - React Native / Expo mobile application shell (`omnicore-mobile/`).
 - Local P2P network peer discovery and beacon synchronization (`discovery.rs`).
-- Multi-target bundling (Desktop + Android + iOS).
+- Multi-target bundling (Desktop + Android + iOS) with automated packaging pipeline (`scripts/bundle.sh`).
+- Mobile daemon settings, Tor SOCKS5 proxy, and cryptographic identity pairing.
+
+## Milestone 5: Production Hardening, Key Ratchets & Native Performance (In Progress)
+- Double Ratchet session persistence and X3DH pre-key bundles (`ratchet.rs`).
+- WebSocket IPC daemon server (`server.rs`).
+- Cross-platform federation and multi-tier cascade routing (`router.rs`, `federation.rs`).
