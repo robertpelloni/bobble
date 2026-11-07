@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.5.6:
+  - Diverse Multipath Routing Fallback Scenarios: Added integration tests for P2P Tox DHT failover to cellular SMS and SimpleX cryptographic queue failover to Matrix homeserver in `omnicore-engine/src/router.rs`.
 - 0.5.5:
   - Ratchet State Persistence & Ephemeral Pre-Keys: Implemented `RatchetSession::persist_to_db` and `load_from_db` storing ratchet chains directly into SQLCipher `key_store`, and added `PreKeyBundle::generate_ephemeral_bundle` in `omnicore-engine/src/ratchet.rs`.
 - 0.5.4:

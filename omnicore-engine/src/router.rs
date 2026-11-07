@@ -247,4 +247,78 @@ mod tests {
             .to_string()
             .contains("all candidate protocols exhausted"));
     }
+
+    #[tokio::test]
+    async fn test_multipath_router_p2p_tox_to_cellular_sms_fallback() {
+        use crate::bridges::tox::ToxBridge;
+
+        let mut registry = BridgeRegistry::new();
+        // 1. Primary: Uninitialized Tox DHT bridge (fails)
+        let tox = ToxBridge::new();
+        registry.register(ProtocolKind::Tox, Box::new(tox));
+
+        // 2. Fallback: Initialized Cellular SMS bridge (succeeds)
+        let mut sms = SmsBridge::new();
+        let _ = <SmsBridge as ProtocolBridge>::initialize(&mut sms).await;
+        registry.register(ProtocolKind::Sms, Box::new(sms));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+
+        let payload = MessagePayload {
+            recipient_id: "+15550789".to_string(),
+            content: "Off-grid P2P failover to cellular SMS".to_string(),
+            fallback_protocol: "SMS".to_string(),
+        };
+
+        let (chosen, state) = router
+            .route_with_cascade(&payload, ProtocolKind::Tox, &[ProtocolKind::Sms])
+            .await
+            .expect("Tox to SMS fallback should succeed");
+
+        assert_eq!(chosen, ProtocolKind::Sms);
+        match state {
+            DeliveryState::FallbackTriggered { from, to, .. } => {
+                assert_eq!(from, ProtocolKind::Tox);
+                assert_eq!(to, ProtocolKind::Sms);
+            }
+            _ => panic!("Expected FallbackTriggered delivery state"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_multipath_router_simplex_queue_to_matrix_fallback() {
+        use crate::bridges::simplex::SimplexBridge;
+
+        let mut registry = BridgeRegistry::new();
+        // 1. Primary: Uninitialized SimpleX queue bridge (fails)
+        let simplex = SimplexBridge::new();
+        registry.register(ProtocolKind::Simplex, Box::new(simplex));
+
+        // 2. Fallback: Initialized Matrix bridge (succeeds)
+        let mut matrix = MatrixBridge::new();
+        matrix.initialize().await.unwrap();
+        registry.register(ProtocolKind::Matrix, Box::new(matrix));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+
+        let payload = MessagePayload {
+            recipient_id: "!matrix_room_xyz:matrix.org".to_string(),
+            content: "SimpleX queue failover to Matrix homeserver".to_string(),
+            fallback_protocol: "Matrix".to_string(),
+        };
+
+        let (chosen, state) = router
+            .route_with_cascade(&payload, ProtocolKind::Simplex, &[ProtocolKind::Matrix])
+            .await
+            .expect("SimpleX to Matrix fallback should succeed");
+
+        assert_eq!(chosen, ProtocolKind::Matrix);
+        match state {
+            DeliveryState::FallbackTriggered { from, to, .. } => {
+                assert_eq!(from, ProtocolKind::Simplex);
+                assert_eq!(to, ProtocolKind::Matrix);
+            }
+            _ => panic!("Expected FallbackTriggered delivery state"),
+        }
+    }
 }
