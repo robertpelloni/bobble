@@ -4,6 +4,10 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::dispatcher::MessagePayload;
+use crate::models::{DeliveryState, ProtocolKind};
+use crate::router::MultipathRouter;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CausalRelation {
     Equal,
@@ -298,6 +302,36 @@ impl FederationManager {
         }
         Ok(applied_count)
     }
+
+    /// Broadcasts an event to remote members across active protocol bridges using MultipathRouter.
+    pub async fn broadcast_event_via_router(
+        &self,
+        channel_id: &str,
+        event: &ChannelEvent,
+        router: &MultipathRouter,
+        primary_proto: ProtocolKind,
+        fallback_protos: &[ProtocolKind],
+    ) -> Result<Vec<(String, ProtocolKind, DeliveryState)>> {
+        let channel = self.channels.get(channel_id).ok_or_else(|| anyhow!("Channel not found"))?;
+        let mut results = Vec::new();
+
+        for (member_id, _) in &channel.members {
+            if member_id == &event.author_id {
+                continue; // Do not echo back to author
+            }
+
+            let payload = MessagePayload {
+                recipient_id: member_id.clone(),
+                content: format!("[Federated:{}] {}", channel.name, event.payload),
+                fallback_protocol: fallback_protos.first().map(|p| p.as_str().to_string()).unwrap_or_default(),
+            };
+
+            let (chosen, state) = router.route_with_cascade(&payload, primary_proto, fallback_protos).await?;
+            results.push((member_id.clone(), chosen, state));
+        }
+
+        Ok(results)
+    }
 }
 
 #[cfg(test)]
@@ -503,5 +537,73 @@ mod tests {
         assert!(hist_smp[0].verify_signature("alice_priv_key"));
         assert!(hist_smp[1].verify_signature("bob_priv_key"));
         assert!(hist_smp[2].verify_signature("bob_priv_key"));
+    }
+
+    #[tokio::test]
+    async fn test_federated_event_router_delivery() {
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+        use crate::bridge::ProtocolBridge;
+        use crate::bridges::signal::SignalBridge;
+        use crate::bridges::sms::SmsBridge;
+        use crate::router::BridgeRegistry;
+
+        let mut registry = BridgeRegistry::new();
+        // Signal bridge uninitialized (will fail send)
+        let signal = SignalBridge::new();
+        registry.register(ProtocolKind::Signal, Box::new(signal));
+
+        // SMS bridge initialized (will succeed as fallback)
+        let mut sms = SmsBridge::new();
+        let _ = <SmsBridge as ProtocolBridge>::initialize(&mut sms).await;
+        registry.register(ProtocolKind::Sms, Box::new(sms));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+
+        let mut mgr = FederationManager::new();
+        mgr.create_channel("chan_fed_route", "Devs", "Bridge test", "alice");
+
+        // Bob joins
+        let chan = mgr.get_channel_mut("chan_fed_route").unwrap();
+        let mut bob_clock = VectorClock::new();
+        bob_clock.increment("bob");
+        let join_bob = ChannelEvent {
+            event_id: "ev_join_bob".to_string(),
+            channel_id: "chan_fed_route".to_string(),
+            author_id: "bob".to_string(),
+            event_type: "member_join".to_string(),
+            payload: "Bob joined".to_string(),
+            clock: bob_clock,
+            timestamp: 3000,
+            public_key: None,
+            signature: None,
+        };
+        chan.apply_event(join_bob).unwrap();
+
+        // Alice authors message and broadcasts via router
+        let msg = chan.post_message("alice", "Broadcast message to federated group").unwrap();
+
+        let delivery_results = mgr
+            .broadcast_event_via_router(
+                "chan_fed_route",
+                &msg,
+                &router,
+                ProtocolKind::Signal,
+                &[ProtocolKind::Sms],
+            )
+            .await
+            .expect("Broadcast via router should succeed");
+
+        assert_eq!(delivery_results.len(), 1); // 1 recipient (bob)
+        let (recipient, chosen_proto, state) = &delivery_results[0];
+        assert_eq!(recipient, "bob");
+        assert_eq!(chosen_proto, &ProtocolKind::Sms);
+        match state {
+            DeliveryState::FallbackTriggered { from, to, .. } => {
+                assert_eq!(from, &ProtocolKind::Signal);
+                assert_eq!(to, &ProtocolKind::Sms);
+            }
+            _ => panic!("Expected fallback triggered delivery state"),
+        }
     }
 }

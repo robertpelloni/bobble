@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.5.1:
+  - Federated Bridge Gateway & Broadcast Routing: Implemented `broadcast_event_via_router` on `FederationManager` in `omnicore-engine/src/federation.rs` to route multi-party channel events through `MultipathRouter` with automatic cascade fallback delivery.
 - 0.5.0:
   - Milestone 4 Completion & Multi-Target Bundler: Added `scripts/bundle.sh` supporting automated Desktop, Android, and iOS packaging targets. Synchronized `tauri.conf.json` and `app.json` versions to 0.5.0 and established Milestone 5 for production hardening.
 - 0.4.9:
