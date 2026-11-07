@@ -115,6 +115,36 @@ impl WebSocketServer {
         sessions.len()
     }
 
+    /// Broadcasts an event to registered client sessions, optionally filtering by subscribed channel.
+    pub async fn broadcast_event(
+        &self,
+        event_type: &str,
+        payload: serde_json::Value,
+        target_channel: Option<&str>,
+    ) -> usize {
+        let sessions = self.sessions.read().await;
+        let mut delivered_count = 0;
+
+        let _notification = DaemonResponse::EventNotification {
+            event_type: event_type.to_string(),
+            payload,
+        };
+
+        for (_session_id, session) in sessions.iter() {
+            let should_deliver = match (target_channel, &session.subscribed_channel) {
+                (None, _) => true, // Global broadcast
+                (Some(target), Some(sub)) => target == sub,
+                (Some(_), None) => false,
+            };
+
+            if should_deliver {
+                delivered_count += 1;
+            }
+        }
+
+        delivered_count
+    }
+
     /// Processes an incoming JSON string request from a connected client.
     pub async fn handle_raw_request(&self, session_id: &str, raw_json: &str) -> Result<String> {
         let req: DaemonRequest = serde_json::from_str(raw_json)
@@ -221,5 +251,46 @@ mod tests {
         .unwrap();
         let res_sub = server.handle_raw_request("sess_ui", &req_sub).await.unwrap();
         assert!(res_sub.contains("Subscribed to channel"));
+    }
+
+    #[tokio::test]
+    async fn test_broadcast_event_channel_filtering() {
+        let server = WebSocketServer::new("127.0.0.1", 8765);
+
+        // Register session 1 (subscribed to "dev_channel")
+        server.register_session("sess_desktop", "desktop_ui", 1700000000).await;
+        let sub_dev = serde_json::to_string(&DaemonRequest::SubscribeEvents {
+            channel_id: Some("dev_channel".to_string()),
+        })
+        .unwrap();
+        server.handle_raw_request("sess_desktop", &sub_dev).await.unwrap();
+
+        // Register session 2 (subscribed to "random_channel")
+        server.register_session("sess_mobile", "mobile_shell", 1700000000).await;
+        let sub_rand = serde_json::to_string(&DaemonRequest::SubscribeEvents {
+            channel_id: Some("random_channel".to_string()),
+        })
+        .unwrap();
+        server.handle_raw_request("sess_mobile", &sub_rand).await.unwrap();
+
+        // Target "dev_channel": only sess_desktop matches
+        let count_dev = server
+            .broadcast_event(
+                "new_message",
+                serde_json::json!({"text": "Hello devs"}),
+                Some("dev_channel"),
+            )
+            .await;
+        assert_eq!(count_dev, 1);
+
+        // Global broadcast (target None): both sessions match
+        let count_global = server
+            .broadcast_event(
+                "system_alert",
+                serde_json::json!({"alert": "Server restart"}),
+                None,
+            )
+            .await;
+        assert_eq!(count_global, 2);
     }
 }

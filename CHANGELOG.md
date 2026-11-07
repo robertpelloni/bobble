@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.5.9:
+  - WebSocket Server Event Broadcasting: Implemented `broadcast_event` on `WebSocketServer` in `omnicore-engine/src/server.rs` supporting channel-targeted and global real-time event distribution to connected desktop and mobile clients.
 - 0.5.8:
   - Circuit-Breaker Fault Tolerance: Implemented `CircuitState` (Closed, Open, HalfOpen) and automated cooldown probing in `omnicore-engine/src/router.rs` to bypass failing bridges during network outages and prevent timeout cascading delays.
 - 0.5.7:
