@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.5.5:
+  - Ratchet State Persistence & Ephemeral Pre-Keys: Implemented `RatchetSession::persist_to_db` and `load_from_db` storing ratchet chains directly into SQLCipher `key_store`, and added `PreKeyBundle::generate_ephemeral_bundle` in `omnicore-engine/src/ratchet.rs`.
 - 0.5.4:
   - Multi-Bridge Mesh Relay Orchestration: Added integration test `test_multi_bridge_mesh_relay_broadcast` in `omnicore-engine/src/federation.rs` verifying 4-party channel state broadcasting across protocol bridges with automated fallback to Matrix and SMS.
 - 0.5.3:

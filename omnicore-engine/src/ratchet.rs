@@ -3,7 +3,9 @@
 //! Implements forward secrecy key ratchets, asymmetric pre-key bundles (X3DH-inspired),
 //! and message chain stepping across decentralized asynchronous message transports.
 
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
+use crate::db::Database;
 
 /// Pre-Key Bundle published by contacts for asynchronous forward-secure handshakes.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -32,6 +34,19 @@ impl PreKeyBundle {
     /// Consumes a single-use pre-key from the published bundle.
     pub fn consume_one_time_key(&mut self) -> Option<String> {
         self.one_time_prekeys.pop()
+    }
+
+    /// Generates a pre-key bundle with N one-time ephemeral pre-keys.
+    pub fn generate_ephemeral_bundle(identity: &str, count: usize) -> Self {
+        let opks: Vec<String> = (1..=count)
+            .map(|i| format!("opk_{}_{}", identity, i))
+            .collect();
+        Self {
+            identity_key: format!("id_key_{}", identity),
+            signed_prekey: format!("spk_{}_1", identity),
+            signature: format!("sig_spk_{}", identity),
+            one_time_prekeys: opks,
+        }
     }
 }
 
@@ -98,6 +113,35 @@ impl RatchetSession {
 
         msg_key
     }
+
+    /// Serializes session state into encrypted key_store byte payload.
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
+        serde_json::to_vec(self)
+            .map_err(|e| anyhow!("Failed to serialize RatchetSession: {}", e))
+    }
+
+    /// Deserializes session state from encrypted key_store byte payload.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        serde_json::from_slice(bytes)
+            .map_err(|e| anyhow!("Failed to deserialize RatchetSession: {}", e))
+    }
+
+    /// Persists the active ratchet session state into SQLCipher key_store.
+    pub fn persist_to_db(&self, db: &Database, protocol: &str) -> Result<()> {
+        let key_data = self.to_bytes()?;
+        db.save_key_material(protocol, &self.peer_id, "double_ratchet_session", &key_data)?;
+        Ok(())
+    }
+
+    /// Loads a persisted ratchet session state from SQLCipher key_store.
+    pub fn load_from_db(db: &Database, protocol: &str, peer_id: &str) -> Result<Option<Self>> {
+        if let Some(key_data) = db.get_key_material(protocol, peer_id, "double_ratchet_session")? {
+            let session = Self::from_bytes(&key_data)?;
+            Ok(Some(session))
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -132,5 +176,40 @@ mod tests {
 
         let recv_key0 = session.step_recv(0);
         assert!(!recv_key0.is_empty());
+    }
+
+    #[test]
+    fn test_ephemeral_bundle_generation() {
+        let mut bundle = PreKeyBundle::generate_ephemeral_bundle("bob", 5);
+        assert_eq!(bundle.identity_key, "id_key_bob");
+        assert_eq!(bundle.one_time_prekeys.len(), 5);
+
+        let consumed = bundle.consume_one_time_key();
+        assert_eq!(consumed, Some("opk_bob_5".to_string()));
+        assert_eq!(bundle.one_time_prekeys.len(), 4);
+    }
+
+    #[test]
+    fn test_ratchet_session_db_persistence() {
+        let db_path = ":memory:";
+        let db = Database::init(db_path, "test_ratchet_passphrase").unwrap();
+        let secret = b"shared_key_persistence_vector";
+        let mut session = RatchetSession::new("sess_persisted_1", "peer_carol", secret);
+        session.step_send();
+        session.step_send();
+        assert_eq!(session.message_counter, 2);
+
+        // Persist to SQLCipher key_store
+        session.persist_to_db(&db, "Signal").unwrap();
+
+        // Load back from SQLCipher key_store
+        let loaded = RatchetSession::load_from_db(&db, "Signal", "peer_carol")
+            .unwrap()
+            .expect("Session should be loaded from db");
+
+        assert_eq!(loaded.session_id, "sess_persisted_1");
+        assert_eq!(loaded.peer_id, "peer_carol");
+        assert_eq!(loaded.message_counter, 2);
+        assert_eq!(loaded.root_key, secret);
     }
 }
