@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.4.9:
+  - Decentralized QR Identity Pairing: Extended `IdentityCard` in `omnicore-engine/src/identity.rs` with `to_qr_payload`, `from_qr_payload`, and `verify_peer_handshake` enabling QR contact scanning and mutual authentication challenges.
 - 0.4.8:
   - Cross-Platform Federated Synchronization: Added multi-platform federated message delivery and delta synchronization integration tests in `omnicore-engine/src/federation.rs` verifying state convergence across Signal, Matrix, and SimpleX nodes with signature verification.
 - 0.4.7:

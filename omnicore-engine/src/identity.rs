@@ -90,6 +90,57 @@ impl IdentityCard {
         let expected_sig = format!("{:x}", md5_digest_approx(expected_payload.as_bytes()));
         self.signature_hex == expected_sig
     }
+
+    /// Encodes a compact QR payload string for mobile peer scanning.
+    pub fn to_qr_payload(&self) -> Result<String> {
+        let json = serde_json::to_string(self)
+            .map_err(|e| anyhow!("Failed to serialize identity card: {}", e))?;
+        let encoded = hex_encode_bytes(json.as_bytes());
+        Ok(format!("omnicore://identity?data={}", encoded))
+    }
+
+    /// Reconstructs an IdentityCard from a scanned QR payload string.
+    pub fn from_qr_payload(uri: &str) -> Result<Self> {
+        let prefix = "omnicore://identity?data=";
+        if !uri.starts_with(prefix) {
+            return Err(anyhow!("Invalid QR identity URI scheme"));
+        }
+        let hex_data = &uri[prefix.len()..];
+        let bytes = hex_decode_bytes(hex_data)?;
+        let json = String::from_utf8(bytes)
+            .map_err(|e| anyhow!("Corrupted identity card JSON encoding: {}", e))?;
+        let card: Self = serde_json::from_str(&json)
+            .map_err(|e| anyhow!("Failed to deserialize identity card from QR: {}", e))?;
+        if !card.verify_signature() {
+            return Err(anyhow!("QR identity card failed cryptographic verification"));
+        }
+        Ok(card)
+    }
+
+    /// Validates an interactive mutual challenge response from a scanned peer.
+    pub fn verify_peer_handshake(&self, challenge: &[u8], signature_hex: &str) -> bool {
+        let mut payload = challenge.to_vec();
+        payload.extend_from_slice(self.fingerprint.public_key_hex.as_bytes());
+        let expected = format!("{:x}", md5_digest_approx(&payload));
+        signature_hex == expected
+    }
+}
+
+fn hex_encode_bytes(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+fn hex_decode_bytes(hex_str: &str) -> Result<Vec<u8>> {
+    if hex_str.len() % 2 != 0 {
+        return Err(anyhow!("Odd length hex string"));
+    }
+    (0..hex_str.len())
+        .step_by(2)
+        .map(|i| {
+            u8::from_str_radix(&hex_str[i..i + 2], 16)
+                .map_err(|e| anyhow!("Invalid hex byte: {}", e))
+        })
+        .collect()
 }
 
 fn md5_digest_approx(bytes: &[u8]) -> u128 {
@@ -124,5 +175,41 @@ mod tests {
         assert_eq!(card.unified_id, imported.unified_id);
         assert_eq!(card.display_name, imported.display_name);
         assert!(imported.verify_signature());
+    }
+
+    #[test]
+    fn test_identity_card_qr_payload_roundtrip() {
+        let mut mappings = HashMap::new();
+        mappings.insert(ProtocolKind::Signal, "+15550300".to_string());
+        mappings.insert(ProtocolKind::Simplex, "simplex_contact_abc".to_string());
+
+        let pk = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
+        let card = IdentityCard::new("bob_unified", "Bob Smith", pk, mappings);
+
+        let qr_uri = card.to_qr_payload().unwrap();
+        assert!(qr_uri.starts_with("omnicore://identity?data="));
+
+        let decoded = IdentityCard::from_qr_payload(&qr_uri).unwrap();
+        assert_eq!(decoded.unified_id, "bob_unified");
+        assert_eq!(decoded.display_name, "Bob Smith");
+        assert!(decoded.verify_signature());
+    }
+
+    #[test]
+    fn test_identity_card_peer_handshake_verification() {
+        let card = IdentityCard::new(
+            "alice_auth",
+            "Alice Montgomery",
+            "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321",
+            HashMap::new(),
+        );
+
+        let challenge = b"random_mutual_session_nonce_1234";
+        let mut payload = challenge.to_vec();
+        payload.extend_from_slice(card.fingerprint.public_key_hex.as_bytes());
+        let valid_sig = format!("{:x}", md5_digest_approx(&payload));
+
+        assert!(card.verify_peer_handshake(challenge, &valid_sig));
+        assert!(!card.verify_peer_handshake(challenge, "invalid_signature"));
     }
 }
