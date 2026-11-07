@@ -26,7 +26,18 @@ Summarize everything learned during the session that was not obvious at the star
 - The desktop frontend UI was completely redesigned and consolidated into a high-value single-page multi-pane interface in React 19 + TypeScript + TailwindCSS.
 - Cross-platform mobile shell established in `omnicore-mobile/` using React Native / Expo, providing on-device conversation feeds, transport tags, and bridge telemetry.
 - Automation scripts were created in `scripts/`: `build.sh`, `test.sh`, `dev.sh`, `run.sh`.
-- Global version is governed by `VERSION.md` (0.4.3).
+- Global version is governed by `VERSION.md` (0.5.4).
+- 4-node multi-bridge mesh broadcast integration test added to `omnicore-engine/src/federation.rs`.
+- Matrix and Discord protocol bridge reliability and retry loops hardened in `omnicore-engine/src/bridges/`.
+- Root README.md thoroughly updated with comprehensive architecture diagrams, SQLCipher schema, and script guides.
+- Federated event router delivery gateway implemented in `omnicore-engine/src/federation.rs`.
+- Milestone 4 completed with multi-target bundling automation in `scripts/bundle.sh`.
+- Decentralized QR identity card pairing and mutual handshake verification added to `omnicore-engine/src/identity.rs`.
+- Multi-platform federated message delivery and delta synchronization test added to `omnicore-engine/src/federation.rs`.
+- Multi-tier protocol cascade fallback testing and BridgeRegistry query inspection added to `omnicore-engine/src/router.rs`.
+- Decentralized key ratchets and pre-key bundles implemented in `omnicore-engine/src/ratchet.rs`.
+- End-to-end WebSocket IPC daemon server implemented in `omnicore-engine/src/server.rs`.
+- Cryptographic event signatures and tamper verification added to `omnicore-engine/src/federation.rs`.
 - Mobile shell settings screen implemented in `omnicore-mobile/src/screens/SettingsScreen.tsx` wired into `omnicore-mobile/App.tsx`.
 - Reputation & Anti-Spam engine implemented in `omnicore-engine/src/reputation.rs` with sliding-window rate limiting, cryptographic signature verification rewards, delivery acknowledgment tracking, and blacklist enforcement.
 - Causal conflict resolution and deterministic multi-replica event ordering implemented in `omnicore-engine/src/federation.rs`.

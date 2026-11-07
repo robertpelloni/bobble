@@ -25,6 +25,14 @@ impl BridgeRegistry {
     pub fn get(&self, protocol: ProtocolKind) -> Option<Arc<RwLock<Box<dyn ProtocolBridge>>>> {
         self.bridges.get(&protocol).cloned()
     }
+
+    pub fn active_bridge_count(&self) -> usize {
+        self.bridges.len()
+    }
+
+    pub fn available_protocols(&self) -> Vec<ProtocolKind> {
+        self.bridges.keys().copied().collect()
+    }
 }
 
 pub struct MultipathRouter {
@@ -159,5 +167,84 @@ mod tests {
             }
             _ => panic!("Expected FallbackTriggered delivery state"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_multipath_router_multi_tier_cascade_to_tertiary() {
+        let mut registry = BridgeRegistry::new();
+
+        // 1. Primary: Uninitialized Signal bridge (fails)
+        let signal = SignalBridge::new();
+        registry.register(ProtocolKind::Signal, Box::new(signal));
+
+        // 2. Secondary fallback: Uninitialized Matrix bridge (fails)
+        let matrix = MatrixBridge::new();
+        registry.register(ProtocolKind::Matrix, Box::new(matrix));
+
+        // 3. Tertiary fallback: Initialized SMS bridge (succeeds)
+        let mut sms = SmsBridge::new();
+        let _ = <SmsBridge as ProtocolBridge>::initialize(&mut sms).await;
+        registry.register(ProtocolKind::Sms, Box::new(sms));
+
+        assert_eq!(registry.active_bridge_count(), 3);
+        let protocols = registry.available_protocols();
+        assert!(protocols.contains(&ProtocolKind::Signal));
+        assert!(protocols.contains(&ProtocolKind::Matrix));
+        assert!(protocols.contains(&ProtocolKind::Sms));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+
+        let payload = MessagePayload {
+            recipient_id: "+15550299".to_string(),
+            content: "Testing 3-tier cascade".to_string(),
+            fallback_protocol: "SMS".to_string(),
+        };
+
+        let (chosen, state) = router
+            .route_with_cascade(
+                &payload,
+                ProtocolKind::Signal,
+                &[ProtocolKind::Matrix, ProtocolKind::Sms],
+            )
+            .await
+            .expect("Cascade to tertiary fallback should succeed");
+
+        assert_eq!(chosen, ProtocolKind::Sms);
+        match state {
+            DeliveryState::FallbackTriggered { from, to, .. } => {
+                assert_eq!(from, ProtocolKind::Signal);
+                assert_eq!(to, ProtocolKind::Sms);
+            }
+            _ => panic!("Expected FallbackTriggered delivery state"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_multipath_router_complete_exhaustion_failure() {
+        let mut registry = BridgeRegistry::new();
+
+        // All bridges uninitialized -> all will fail send
+        let signal = SignalBridge::new();
+        registry.register(ProtocolKind::Signal, Box::new(signal));
+        let matrix = MatrixBridge::new();
+        registry.register(ProtocolKind::Matrix, Box::new(matrix));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+
+        let payload = MessagePayload {
+            recipient_id: "+15559999".to_string(),
+            content: "Testing candidate exhaustion".to_string(),
+            fallback_protocol: "Matrix".to_string(),
+        };
+
+        let result = router
+            .route_with_cascade(&payload, ProtocolKind::Signal, &[ProtocolKind::Matrix])
+            .await;
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("all candidate protocols exhausted"));
     }
 }

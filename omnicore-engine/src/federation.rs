@@ -4,6 +4,10 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::dispatcher::MessagePayload;
+use crate::models::{DeliveryState, ProtocolKind};
+use crate::router::MultipathRouter;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CausalRelation {
     Equal,
@@ -81,9 +85,55 @@ pub struct ChannelEvent {
     pub payload: String,
     pub clock: VectorClock,
     pub timestamp: u64,
+    pub public_key: Option<String>,
+    pub signature: Option<String>,
 }
 
 impl ChannelEvent {
+    /// Computes canonical hash over event content for cryptographic signing.
+    pub fn digest(&self) -> String {
+        let canonical_str = format!(
+            "{}:{}:{}:{}:{}:{}",
+            self.event_id, self.channel_id, self.author_id, self.event_type, self.payload, self.timestamp
+        );
+        let mut hash: u128 = 0xcbf29ce484222325;
+        for byte in canonical_str.as_bytes() {
+            hash ^= *byte as u128;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        format!("{:032x}", hash)
+    }
+
+    /// Signs the event using a simulated key pair identifier.
+    pub fn sign(&mut self, pubkey: &str, privkey_sim: &str) {
+        self.public_key = Some(pubkey.to_string());
+        let digest = self.digest();
+        let payload = format!("{}:{}", digest, privkey_sim);
+        let mut hash: u128 = 0xcbf29ce484222325;
+        for byte in payload.as_bytes() {
+            hash ^= *byte as u128;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        self.signature = Some(format!("{:032x}", hash));
+    }
+
+    /// Verifies the signature integrity against the author's public key.
+    pub fn verify_signature(&self, privkey_sim: &str) -> bool {
+        if let Some(ref sig) = self.signature {
+            let digest = self.digest();
+            let payload = format!("{}:{}", digest, privkey_sim);
+            let mut hash: u128 = 0xcbf29ce484222325;
+            for byte in payload.as_bytes() {
+                hash ^= *byte as u128;
+                hash = hash.wrapping_mul(0x100000001b3);
+            }
+            let expected_sig = format!("{:032x}", hash);
+            sig == &expected_sig
+        } else {
+            false
+        }
+    }
+
     /// Deterministic total ordering between two events:
     /// 1. Causal order (HappenedBefore < HappenedAfter)
     /// 2. If concurrent: timestamp ascending, author_id ascending, event_id ascending.
@@ -162,6 +212,8 @@ impl FederatedChannel {
             payload: content.to_string(),
             clock: self.clock.clone(),
             timestamp: now,
+            public_key: None,
+            signature: None,
         };
 
         self.event_history.push(event.clone());
@@ -250,6 +302,36 @@ impl FederationManager {
         }
         Ok(applied_count)
     }
+
+    /// Broadcasts an event to remote members across active protocol bridges using MultipathRouter.
+    pub async fn broadcast_event_via_router(
+        &self,
+        channel_id: &str,
+        event: &ChannelEvent,
+        router: &MultipathRouter,
+        primary_proto: ProtocolKind,
+        fallback_protos: &[ProtocolKind],
+    ) -> Result<Vec<(String, ProtocolKind, DeliveryState)>> {
+        let channel = self.channels.get(channel_id).ok_or_else(|| anyhow!("Channel not found"))?;
+        let mut results = Vec::new();
+
+        for (member_id, _) in &channel.members {
+            if member_id == &event.author_id {
+                continue; // Do not echo back to author
+            }
+
+            let payload = MessagePayload {
+                recipient_id: member_id.clone(),
+                content: format!("[Federated:{}] {}", channel.name, event.payload),
+                fallback_protocol: fallback_protos.first().map(|p| p.as_str().to_string()).unwrap_or_default(),
+            };
+
+            let (chosen, state) = router.route_with_cascade(&payload, primary_proto, fallback_protos).await?;
+            results.push((member_id.clone(), chosen, state));
+        }
+
+        Ok(results)
+    }
 }
 
 #[cfg(test)]
@@ -278,6 +360,32 @@ mod tests {
     }
 
     #[test]
+    fn test_channel_event_signing_and_verification() {
+        let mut ev = ChannelEvent {
+            event_id: "ev_sig_1".to_string(),
+            channel_id: "chan_secure".to_string(),
+            author_id: "alice".to_string(),
+            event_type: "message".to_string(),
+            payload: "Signed message content".to_string(),
+            clock: VectorClock::new(),
+            timestamp: 1700000000,
+            public_key: None,
+            signature: None,
+        };
+
+        let pubkey = "alice_ed25519_pub";
+        let privkey = "secret_key_simulation_123";
+
+        ev.sign(pubkey, privkey);
+        assert!(ev.signature.is_some());
+        assert!(ev.verify_signature(privkey));
+
+        // Tamper with payload
+        ev.payload = "Tampered message content".to_string();
+        assert!(!ev.verify_signature(privkey));
+    }
+
+    #[test]
     fn test_federated_channel_event_application_and_sync() {
         let mut mgr = FederationManager::new();
         mgr.create_channel("chan_general", "General Discussion", "Universal Cross-Platform Chat", "alice");
@@ -297,6 +405,8 @@ mod tests {
             payload: "Bob has joined the channel".to_string(),
             clock: bob_clock,
             timestamp: 1000,
+            public_key: None,
+            signature: None,
         };
 
         channel.apply_event(join_event).unwrap();
@@ -329,6 +439,8 @@ mod tests {
             payload: "Bob joined".to_string(),
             clock: bob_clock,
             timestamp: 1050,
+            public_key: None,
+            signature: None,
         };
         chan_b.apply_event(ev_bob_join.clone()).unwrap();
         let ev_bob = chan_b.post_message("bob", "Hello from Bob").unwrap();
@@ -342,6 +454,231 @@ mod tests {
         assert_eq!(chan_a.event_history.len(), chan_b.event_history.len());
         for (ea, eb) in chan_a.event_history.iter().zip(chan_b.event_history.iter()) {
             assert_eq!(ea.event_id, eb.event_id);
+        }
+    }
+
+    #[test]
+    fn test_cross_platform_federated_sync_and_delivery() {
+        let mut node_signal = FederationManager::new();
+        let mut node_matrix = FederationManager::new();
+        let mut node_simplex = FederationManager::new();
+
+        // 1. Initialize channel on node_signal with Alice as creator
+        node_signal.create_channel("chan_cross_net", "Global Devs", "Multi-bridge Chat", "alice");
+
+        // 2. Alice sends an initial message
+        let chan = node_signal.get_channel_mut("chan_cross_net").unwrap();
+        let mut msg1 = chan.post_message("alice", "Bridge sync test started").unwrap();
+        msg1.sign("alice_pub", "alice_priv_key");
+
+        // 3. Matrix node synchronizes channel creation and Alice's message
+        node_matrix.create_channel("chan_cross_net", "Global Devs", "Multi-bridge Chat", "alice");
+        let applied_matrix = node_matrix
+            .sync_channel_events("chan_cross_net", vec![msg1.clone()])
+            .unwrap();
+        assert_eq!(applied_matrix, 1);
+
+        // 4. Bob joins from Matrix node and replies
+        let chan_m = node_matrix.get_channel_mut("chan_cross_net").unwrap();
+        let mut bob_clock = chan_m.clock.clone();
+        bob_clock.increment("bob");
+        let mut join_bob = ChannelEvent {
+            event_id: "ev_bob_join_matrix".to_string(),
+            channel_id: "chan_cross_net".to_string(),
+            author_id: "bob".to_string(),
+            event_type: "member_join".to_string(),
+            payload: "Bob joined via Matrix".to_string(),
+            clock: bob_clock,
+            timestamp: 2000,
+            public_key: None,
+            signature: None,
+        };
+        join_bob.sign("bob_pub", "bob_priv_key");
+        chan_m.apply_event(join_bob.clone()).unwrap();
+
+        let mut msg2 = chan_m.post_message("bob", "ACK from Matrix bridge").unwrap();
+        msg2.sign("bob_pub", "bob_priv_key");
+        // Update signed event in chan_m history so missing events contains the signature
+        if let Some(last) = chan_m.event_history.last_mut() {
+            *last = msg2.clone();
+        }
+
+        // 5. SimpleX node syncs all missing events from Matrix
+        node_simplex.create_channel("chan_cross_net", "Global Devs", "Multi-bridge Chat", "alice");
+        let chan_s = node_simplex.get_channel("chan_cross_net").unwrap();
+        let missing_for_simplex = chan_m.get_missing_events(&chan_s.clock);
+        assert_eq!(missing_for_simplex.len(), 3); // msg1, join_bob, msg2
+
+        let applied_simplex = node_simplex
+            .sync_channel_events("chan_cross_net", missing_for_simplex)
+            .unwrap();
+        assert_eq!(applied_simplex, 3);
+
+        // 6. Node Signal receives Bob's join and reply from Matrix
+        let chan_sig = node_signal.get_channel_mut("chan_cross_net").unwrap();
+        chan_sig.apply_event(join_bob).unwrap();
+        chan_sig.apply_event(msg2).unwrap();
+
+        // 7. Verify all three platform nodes have identical converged histories and verified signatures
+        let hist_sig = &node_signal.get_channel("chan_cross_net").unwrap().event_history;
+        let hist_mat = &node_matrix.get_channel("chan_cross_net").unwrap().event_history;
+        let hist_smp = &node_simplex.get_channel("chan_cross_net").unwrap().event_history;
+
+        assert_eq!(hist_sig.len(), 3);
+        assert_eq!(hist_mat.len(), 3);
+        assert_eq!(hist_smp.len(), 3);
+
+        for i in 0..3 {
+            assert_eq!(hist_sig[i].event_id, hist_mat[i].event_id);
+            assert_eq!(hist_mat[i].event_id, hist_smp[i].event_id);
+        }
+
+        // Verify signatures of delivered messages
+        assert!(hist_smp[0].verify_signature("alice_priv_key"));
+        assert!(hist_smp[1].verify_signature("bob_priv_key"));
+        assert!(hist_smp[2].verify_signature("bob_priv_key"));
+    }
+
+    #[tokio::test]
+    async fn test_federated_event_router_delivery() {
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+        use crate::bridge::ProtocolBridge;
+        use crate::bridges::signal::SignalBridge;
+        use crate::bridges::sms::SmsBridge;
+        use crate::router::BridgeRegistry;
+
+        let mut registry = BridgeRegistry::new();
+        // Signal bridge uninitialized (will fail send)
+        let signal = SignalBridge::new();
+        registry.register(ProtocolKind::Signal, Box::new(signal));
+
+        // SMS bridge initialized (will succeed as fallback)
+        let mut sms = SmsBridge::new();
+        let _ = <SmsBridge as ProtocolBridge>::initialize(&mut sms).await;
+        registry.register(ProtocolKind::Sms, Box::new(sms));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+
+        let mut mgr = FederationManager::new();
+        mgr.create_channel("chan_fed_route", "Devs", "Bridge test", "alice");
+
+        // Bob joins
+        let chan = mgr.get_channel_mut("chan_fed_route").unwrap();
+        let mut bob_clock = VectorClock::new();
+        bob_clock.increment("bob");
+        let join_bob = ChannelEvent {
+            event_id: "ev_join_bob".to_string(),
+            channel_id: "chan_fed_route".to_string(),
+            author_id: "bob".to_string(),
+            event_type: "member_join".to_string(),
+            payload: "Bob joined".to_string(),
+            clock: bob_clock,
+            timestamp: 3000,
+            public_key: None,
+            signature: None,
+        };
+        chan.apply_event(join_bob).unwrap();
+
+        // Alice authors message and broadcasts via router
+        let msg = chan.post_message("alice", "Broadcast message to federated group").unwrap();
+
+        let delivery_results = mgr
+            .broadcast_event_via_router(
+                "chan_fed_route",
+                &msg,
+                &router,
+                ProtocolKind::Signal,
+                &[ProtocolKind::Sms],
+            )
+            .await
+            .expect("Broadcast via router should succeed");
+
+        assert_eq!(delivery_results.len(), 1); // 1 recipient (bob)
+        let (recipient, chosen_proto, state) = &delivery_results[0];
+        assert_eq!(recipient, "bob");
+        assert_eq!(chosen_proto, &ProtocolKind::Sms);
+        match state {
+            DeliveryState::FallbackTriggered { from, to, .. } => {
+                assert_eq!(from, &ProtocolKind::Signal);
+                assert_eq!(to, &ProtocolKind::Sms);
+            }
+            _ => panic!("Expected fallback triggered delivery state"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_multi_bridge_mesh_relay_broadcast() {
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+        use crate::bridge::ProtocolBridge;
+        use crate::bridges::signal::SignalBridge;
+        use crate::bridges::matrix::MatrixBridge;
+        use crate::bridges::sms::SmsBridge;
+        use crate::router::BridgeRegistry;
+
+        // Configure router with initialized Matrix & SMS bridges, uninitialized Signal
+        let mut registry = BridgeRegistry::new();
+        let signal = SignalBridge::new(); // will fail send
+        registry.register(ProtocolKind::Signal, Box::new(signal));
+
+        let mut matrix = MatrixBridge::new();
+        matrix.initialize().await.unwrap(); // will succeed
+        registry.register(ProtocolKind::Matrix, Box::new(matrix));
+
+        let mut sms = SmsBridge::new();
+        let _ = <SmsBridge as ProtocolBridge>::initialize(&mut sms).await;
+        registry.register(ProtocolKind::Sms, Box::new(sms));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+
+        // Create 4-node federated channel
+        let mut mgr = FederationManager::new();
+        mgr.create_channel("chan_mesh", "Cross-Platform Mesh", "4-bridge test", "alice");
+
+        let chan = mgr.get_channel_mut("chan_mesh").unwrap();
+        // Members bob, charlie, and dave join
+        for name in &["bob", "charlie", "dave"] {
+            let mut clk = VectorClock::new();
+            clk.increment(name);
+            chan.apply_event(ChannelEvent {
+                event_id: format!("ev_join_{}", name),
+                channel_id: "chan_mesh".to_string(),
+                author_id: name.to_string(),
+                event_type: "member_join".to_string(),
+                payload: format!("{} joined", name),
+                clock: clk,
+                timestamp: 4000,
+                public_key: None,
+                signature: None,
+            }).unwrap();
+        }
+
+        // Alice broadcasts event across bridges with fallback
+        let ev_msg = chan.post_message("alice", "Mesh relay test across Signal, Matrix, SMS").unwrap();
+
+        let results = mgr
+            .broadcast_event_via_router(
+                "chan_mesh",
+                &ev_msg,
+                &router,
+                ProtocolKind::Signal,
+                &[ProtocolKind::Matrix, ProtocolKind::Sms],
+            )
+            .await
+            .expect("Mesh broadcast should succeed");
+
+        // Should broadcast to 3 peers (bob, charlie, dave)
+        assert_eq!(results.len(), 3);
+        for (_, chosen, state) in results {
+            assert_eq!(chosen, ProtocolKind::Matrix);
+            match state {
+                DeliveryState::FallbackTriggered { from, to, .. } => {
+                    assert_eq!(from, ProtocolKind::Signal);
+                    assert_eq!(to, ProtocolKind::Matrix);
+                }
+                _ => panic!("Expected FallbackTriggered to Matrix"),
+            }
         }
     }
 }

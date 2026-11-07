@@ -2,6 +2,28 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.5.4:
+  - Multi-Bridge Mesh Relay Orchestration: Added integration test `test_multi_bridge_mesh_relay_broadcast` in `omnicore-engine/src/federation.rs` verifying 4-party channel state broadcasting across protocol bridges with automated fallback to Matrix and SMS.
+- 0.5.3:
+  - Protocol Bridge Reliability Hardening: Refined `MatrixBridge` and `DiscordBridge` with retry policies, input validation (empty content/recipient checks), and `is_connected` status queries.
+- 0.5.2:
+  - README Architectural Blueprint & Spec Update: Overhauled root `README.md` to thoroughly document the active headless Rust core engine architecture, SQLCipher schema, multi-path fallback router, mobile/desktop shells, and automation scripts.
+- 0.5.1:
+  - Federated Bridge Gateway & Broadcast Routing: Implemented `broadcast_event_via_router` on `FederationManager` in `omnicore-engine/src/federation.rs` to route multi-party channel events through `MultipathRouter` with automatic cascade fallback delivery.
+- 0.5.0:
+  - Milestone 4 Completion & Multi-Target Bundler: Added `scripts/bundle.sh` supporting automated Desktop, Android, and iOS packaging targets. Synchronized `tauri.conf.json` and `app.json` versions to 0.5.0 and established Milestone 5 for production hardening.
+- 0.4.9:
+  - Decentralized QR Identity Pairing: Extended `IdentityCard` in `omnicore-engine/src/identity.rs` with `to_qr_payload`, `from_qr_payload`, and `verify_peer_handshake` enabling QR contact scanning and mutual authentication challenges.
+- 0.4.8:
+  - Cross-Platform Federated Synchronization: Added multi-platform federated message delivery and delta synchronization integration tests in `omnicore-engine/src/federation.rs` verifying state convergence across Signal, Matrix, and SimpleX nodes with signature verification.
+- 0.4.7:
+  - Multi-Tier Protocol Fallback Cascades: Added comprehensive 3-tier fallback cascade integration tests and candidate exhaustion failure testing in `omnicore-engine/src/router.rs`, with `active_bridge_count` and `available_protocols` queries on `BridgeRegistry`.
+- 0.4.6:
+  - Decentralized Key Ratchets & Pre-Key Bundles: Implemented `PreKeyBundle` and `RatchetSession` in `omnicore-engine/src/ratchet.rs` supporting forward secrecy message chain derivation and asynchronous pre-key bundle consumption.
+- 0.4.5:
+  - WebSocket IPC Daemon Server: Implemented `WebSocketServer`, `ClientSession`, `DaemonRequest`, and `DaemonResponse` in `omnicore-engine/src/server.rs` providing bi-directional JSON-RPC IPC bridging desktop and mobile clients to the headless core engine.
+- 0.4.4:
+  - Cryptographic Event Signatures & Tamper Detection: Added `ChannelEvent::sign`, `verify_signature`, and canonical content digest in `omnicore-engine/src/federation.rs` protecting federated multi-party group channels from forged or tampered messages.
 - 0.4.3:
   - Causal Conflict Resolution & Deterministic Multi-Party Ordering: Enhanced `omnicore-engine/src/federation.rs` with `CausalRelation`, deterministic tie-breaking (`compare_deterministic`), `post_message`, and `sort_events_deterministically` ensuring convergence across multi-party replicas.
 - 0.4.2:

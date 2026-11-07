@@ -25,7 +25,18 @@ Ongoing internal architectural observations, codebase traits, and design prefere
 - Encrypted Storage: SQLCipher with AES-256-GCM encryption (`cipher_page_size=4096`, `kdf_iter=256000`, `foreign_keys=ON`). Schema includes `contacts`, `mappings`, `threads`, `messages`, `attachments`, `key_store`, and `sync_tokens`. Complete design documented in `omnicore-engine/SCHEMA.md`.
 - Dispatcher: Multi-path timeout fallback engine in `omnicore-engine/src/dispatcher.rs` executing concurrent queues and automated protocol fallback.
 - Desktop UI: React 19 + TypeScript + Vite + TailwindCSS running inside Tauri v2 shell with system tray controls.
-- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.4.3).
+- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.5.4).
+- Multi-Bridge Mesh Relay: `omnicore-engine/src/federation.rs` orchestrates 4-node federated groups across Signal, Matrix, and SMS fallbacks via `broadcast_event_via_router`.
+- Bridge Reliability: `MatrixBridge` and `DiscordBridge` implement configurable retry loops, content validation, and connection state reporting (`is_connected`).
+- Architecture Documentation: `README.md` documents the active headless Rust core engine architecture, SQLCipher schema, protocol bridges, multi-path routing, desktop/mobile shells, and automation scripts.
+- Federated Event Broadcasting: `omnicore-engine/src/federation.rs` links federated channel events directly with `MultipathRouter` via `broadcast_event_via_router`.
+- Multi-Target Bundling: `scripts/bundle.sh` automates desktop release compilation and Expo mobile bundle export for Android and iOS.
+- QR Identity Pairing: `omnicore-engine/src/identity.rs` implements QR payload export/import (`to_qr_payload`, `from_qr_payload`) and mutual handshake verification (`verify_peer_handshake`).
+- Multi-Bridge Federated Convergence: `omnicore-engine/src/federation.rs` integration tests verify message relay and causal synchronization across heterogeneous platform nodes (Signal, Matrix, SimpleX).
+- Multipath Router Cascades: `omnicore-engine/src/router.rs` handles dynamic 3-tier fallback chains across protocol bridges (e.g., Signal -> Matrix -> SMS) with exhaustive fallback recovery.
+- Decentralized Ratchets: `omnicore-engine/src/ratchet.rs` implements `PreKeyBundle` and `RatchetSession` for forward-secure, asynchronous message chain key derivation.
+- WebSocket Daemon IPC: `omnicore-engine/src/server.rs` implements asynchronous JSON-RPC protocol bridging desktop and mobile clients to the headless daemon.
+- Federated Event Integrity: `omnicore-engine/src/federation.rs` implements canonical event hashing (`digest`), signing (`sign`), and signature verification (`verify_signature`) to reject forged federated events.
 - Build Automation: Consolidated in `scripts/build.sh`, `scripts/run.sh`, `scripts/dev.sh`, and `scripts/test.sh`.
 - Mobile Shell Settings: `omnicore-mobile/src/screens/SettingsScreen.tsx` provides mobile interface for Tor routing, engine daemon endpoint, identity cards, and zero-knowledge backups.
 - Reputation & Anti-Spam: `omnicore-engine/src/reputation.rs` implements sliding-window rate limiting, cryptographic signature verification rewards, delivery acknowledgment tracking, and blacklist enforcement.

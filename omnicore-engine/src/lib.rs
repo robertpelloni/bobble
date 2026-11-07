@@ -13,3 +13,5 @@ pub mod identity;
 pub mod backup;
 pub mod federation;
 pub mod reputation;
+pub mod server;
+pub mod ratchet;

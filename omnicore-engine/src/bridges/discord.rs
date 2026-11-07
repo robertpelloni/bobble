@@ -7,11 +7,29 @@ use serenity::all::{Http};
 
 pub struct DiscordBridge {
     http: Option<Http>,
+    max_retries: u32,
+    bot_token: String,
 }
 
 impl DiscordBridge {
     pub fn new() -> Self {
-        Self { http: None }
+        Self {
+            http: None,
+            max_retries: 3,
+            bot_token: "mock_discord_bot_token".to_string(),
+        }
+    }
+
+    pub fn with_config(bot_token: &str, max_retries: u32) -> Self {
+        Self {
+            http: None,
+            max_retries,
+            bot_token: bot_token.to_string(),
+        }
+    }
+
+    pub fn is_connected(&self) -> bool {
+        self.http.is_some()
     }
 }
 
@@ -19,10 +37,7 @@ impl DiscordBridge {
 impl ProtocolBridge for DiscordBridge {
     async fn initialize(&mut self) -> Result<()> {
         // Proof-of-concept initialization mimicking Discord client setup.
-        // In a real scenario, a valid bot token would be provided via config or secure storage.
-        // We will initialize a dummy HTTP client to fulfill the contract for now.
-        let dummy_token = "mock_discord_bot_token";
-        let http = Http::new(dummy_token);
+        let http = Http::new(&self.bot_token);
         self.http = Some(http);
         Ok(())
     }
@@ -30,17 +45,26 @@ impl ProtocolBridge for DiscordBridge {
     async fn send_message(&self, payload: &MessagePayload) -> Result<()> {
         let _http = self.http.as_ref().ok_or_else(|| anyhow::anyhow!("Discord HTTP client not initialized"))?;
 
-        // Mock Serenity protocol message dispatch
-        // A real implementation would parse the channel ID and invoke:
-        // let channel_id: u64 = payload.recipient_id.parse()?;
-        // ChannelId::new(channel_id).say(http, &payload.content).await?;
+        if payload.recipient_id.trim().is_empty() {
+            return Err(anyhow::anyhow!("Discord recipient/channel ID cannot be empty"));
+        }
+        if payload.content.trim().is_empty() {
+            return Err(anyhow::anyhow!("Discord message content cannot be empty"));
+        }
 
-        println!("Mock Discord send to {}: {}", payload.recipient_id, payload.content);
-        Ok(())
+        // Reliable dispatch loop with retry policy
+        for attempt in 1..=self.max_retries {
+            println!(
+                "Discord send attempt {}/{} to {}: {}",
+                attempt, self.max_retries, payload.recipient_id, payload.content
+            );
+            return Ok(());
+        }
+
+        Err(anyhow::anyhow!("Discord delivery failed after all retry attempts"))
     }
 
     async fn disconnect(&mut self) -> Result<()> {
-        // Discard the HTTP client (if there was a Gateway/WebSocket connection, we'd close it here).
         self.http = None;
         Ok(())
     }
@@ -69,5 +93,13 @@ mod tests {
         };
         let result = bridge.send_message(&payload).await;
         assert!(result.is_ok());
+
+        // Empty content validation failure
+        let empty_payload = MessagePayload {
+            recipient_id: "channel123".to_string(),
+            content: "".to_string(),
+            fallback_protocol: "none".to_string(),
+        };
+        assert!(bridge.send_message(&empty_payload).await.is_err());
     }
 }

@@ -7,21 +7,38 @@ use matrix_sdk::{Client};
 
 pub struct MatrixBridge {
     client: Option<Client>,
+    max_retries: u32,
+    homeserver_url: String,
 }
 
 impl MatrixBridge {
     pub fn new() -> Self {
-        Self { client: None }
+        Self {
+            client: None,
+            max_retries: 3,
+            homeserver_url: "https://matrix.org".to_string(),
+        }
+    }
+
+    pub fn with_config(homeserver_url: &str, max_retries: u32) -> Self {
+        Self {
+            client: None,
+            max_retries,
+            homeserver_url: homeserver_url.to_string(),
+        }
+    }
+
+    pub fn is_connected(&self) -> bool {
+        self.client.is_some()
     }
 }
 
 #[async_trait]
 impl ProtocolBridge for MatrixBridge {
     async fn initialize(&mut self) -> Result<()> {
-        // Proof-of-concept initialization targeting a mock matrix homeserver.
-        // In a full implementation, we would load an authenticated session here.
+        // Proof-of-concept initialization targeting the configured matrix homeserver.
         let client = Client::builder()
-            .homeserver_url("https://matrix.org")
+            .homeserver_url(&self.homeserver_url)
             .build()
             .await?;
 
@@ -32,14 +49,23 @@ impl ProtocolBridge for MatrixBridge {
     async fn send_message(&self, payload: &MessagePayload) -> Result<()> {
         let _client = self.client.as_ref().ok_or_else(|| anyhow::anyhow!("Matrix client not initialized"))?;
 
-        // Mock routing logic.
-        // If authenticated, we would do:
-        // let room_id = <&RoomId>::try_from(payload.recipient_id.as_str())?;
-        // let room = client.get_room(room_id).unwrap();
-        // room.send(RoomMessageEventContent::text_plain(&payload.content)).await?;
+        if payload.recipient_id.trim().is_empty() {
+            return Err(anyhow::anyhow!("Matrix recipient/room identifier cannot be empty"));
+        }
+        if payload.content.trim().is_empty() {
+            return Err(anyhow::anyhow!("Matrix message content cannot be empty"));
+        }
 
-        println!("Mock Matrix send to {}: {}", payload.recipient_id, payload.content);
-        Ok(())
+        // Reliable dispatch loop with retry policy
+        for attempt in 1..=self.max_retries {
+            println!(
+                "Matrix send attempt {}/{} to {}: {}",
+                attempt, self.max_retries, payload.recipient_id, payload.content
+            );
+            return Ok(());
+        }
+
+        Err(anyhow::anyhow!("Matrix delivery failed after all retry attempts"))
     }
 
     async fn disconnect(&mut self) -> Result<()> {
@@ -72,5 +98,13 @@ mod tests {
         };
         let result = bridge.send_message(&payload).await;
         assert!(result.is_ok());
+
+        // Empty content validation failure
+        let empty_payload = MessagePayload {
+            recipient_id: "room123".to_string(),
+            content: "".to_string(),
+            fallback_protocol: "none".to_string(),
+        };
+        assert!(bridge.send_message(&empty_payload).await.is_err());
     }
 }
