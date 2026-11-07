@@ -606,4 +606,79 @@ mod tests {
             _ => panic!("Expected fallback triggered delivery state"),
         }
     }
+
+    #[tokio::test]
+    async fn test_multi_bridge_mesh_relay_broadcast() {
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+        use crate::bridge::ProtocolBridge;
+        use crate::bridges::signal::SignalBridge;
+        use crate::bridges::matrix::MatrixBridge;
+        use crate::bridges::sms::SmsBridge;
+        use crate::router::BridgeRegistry;
+
+        // Configure router with initialized Matrix & SMS bridges, uninitialized Signal
+        let mut registry = BridgeRegistry::new();
+        let signal = SignalBridge::new(); // will fail send
+        registry.register(ProtocolKind::Signal, Box::new(signal));
+
+        let mut matrix = MatrixBridge::new();
+        matrix.initialize().await.unwrap(); // will succeed
+        registry.register(ProtocolKind::Matrix, Box::new(matrix));
+
+        let mut sms = SmsBridge::new();
+        let _ = <SmsBridge as ProtocolBridge>::initialize(&mut sms).await;
+        registry.register(ProtocolKind::Sms, Box::new(sms));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+
+        // Create 4-node federated channel
+        let mut mgr = FederationManager::new();
+        mgr.create_channel("chan_mesh", "Cross-Platform Mesh", "4-bridge test", "alice");
+
+        let chan = mgr.get_channel_mut("chan_mesh").unwrap();
+        // Members bob, charlie, and dave join
+        for name in &["bob", "charlie", "dave"] {
+            let mut clk = VectorClock::new();
+            clk.increment(name);
+            chan.apply_event(ChannelEvent {
+                event_id: format!("ev_join_{}", name),
+                channel_id: "chan_mesh".to_string(),
+                author_id: name.to_string(),
+                event_type: "member_join".to_string(),
+                payload: format!("{} joined", name),
+                clock: clk,
+                timestamp: 4000,
+                public_key: None,
+                signature: None,
+            }).unwrap();
+        }
+
+        // Alice broadcasts event across bridges with fallback
+        let ev_msg = chan.post_message("alice", "Mesh relay test across Signal, Matrix, SMS").unwrap();
+
+        let results = mgr
+            .broadcast_event_via_router(
+                "chan_mesh",
+                &ev_msg,
+                &router,
+                ProtocolKind::Signal,
+                &[ProtocolKind::Matrix, ProtocolKind::Sms],
+            )
+            .await
+            .expect("Mesh broadcast should succeed");
+
+        // Should broadcast to 3 peers (bob, charlie, dave)
+        assert_eq!(results.len(), 3);
+        for (_, chosen, state) in results {
+            assert_eq!(chosen, ProtocolKind::Matrix);
+            match state {
+                DeliveryState::FallbackTriggered { from, to, .. } => {
+                    assert_eq!(from, ProtocolKind::Signal);
+                    assert_eq!(to, ProtocolKind::Matrix);
+                }
+                _ => panic!("Expected FallbackTriggered to Matrix"),
+            }
+        }
+    }
 }

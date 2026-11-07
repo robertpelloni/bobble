@@ -25,7 +25,8 @@ Ongoing internal architectural observations, codebase traits, and design prefere
 - Encrypted Storage: SQLCipher with AES-256-GCM encryption (`cipher_page_size=4096`, `kdf_iter=256000`, `foreign_keys=ON`). Schema includes `contacts`, `mappings`, `threads`, `messages`, `attachments`, `key_store`, and `sync_tokens`. Complete design documented in `omnicore-engine/SCHEMA.md`.
 - Dispatcher: Multi-path timeout fallback engine in `omnicore-engine/src/dispatcher.rs` executing concurrent queues and automated protocol fallback.
 - Desktop UI: React 19 + TypeScript + Vite + TailwindCSS running inside Tauri v2 shell with system tray controls.
-- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.5.3).
+- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.5.4).
+- Multi-Bridge Mesh Relay: `omnicore-engine/src/federation.rs` orchestrates 4-node federated groups across Signal, Matrix, and SMS fallbacks via `broadcast_event_via_router`.
 - Bridge Reliability: `MatrixBridge` and `DiscordBridge` implement configurable retry loops, content validation, and connection state reporting (`is_connected`).
 - Architecture Documentation: `README.md` documents the active headless Rust core engine architecture, SQLCipher schema, protocol bridges, multi-path routing, desktop/mobile shells, and automation scripts.
 - Federated Event Broadcasting: `omnicore-engine/src/federation.rs` links federated channel events directly with `MultipathRouter` via `broadcast_event_via_router`.

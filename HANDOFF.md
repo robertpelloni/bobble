@@ -26,7 +26,8 @@ Summarize everything learned during the session that was not obvious at the star
 - The desktop frontend UI was completely redesigned and consolidated into a high-value single-page multi-pane interface in React 19 + TypeScript + TailwindCSS.
 - Cross-platform mobile shell established in `omnicore-mobile/` using React Native / Expo, providing on-device conversation feeds, transport tags, and bridge telemetry.
 - Automation scripts were created in `scripts/`: `build.sh`, `test.sh`, `dev.sh`, `run.sh`.
-- Global version is governed by `VERSION.md` (0.5.3).
+- Global version is governed by `VERSION.md` (0.5.4).
+- 4-node multi-bridge mesh broadcast integration test added to `omnicore-engine/src/federation.rs`.
 - Matrix and Discord protocol bridge reliability and retry loops hardened in `omnicore-engine/src/bridges/`.
 - Root README.md thoroughly updated with comprehensive architecture diagrams, SQLCipher schema, and script guides.
 - Federated event router delivery gateway implemented in `omnicore-engine/src/federation.rs`.
