@@ -41,7 +41,8 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Implement compute module appliance telemetry evaluation with cellular failover and safe shutdown triggers in `omnicore-engine/src/telemetry.rs`.
 - [x] Implement multi-hop mesh announcement with hop decrement and neighbor peer caching in `omnicore-engine/src/discovery.rs`.
 - [x] Implement multi-hop packet store-and-forward mesh relay protocol over BLE and Wi-Fi Direct in `omnicore-engine/src/mesh.rs`.
-- [ ] Implement BLE GATT peripheral/central service daemon for mobile and appliance mesh links.
+- [x] Implement BLE GATT peripheral/central service daemon coordinator and TTL cache pruning in `omnicore-engine/src/mesh.rs`.
+- [ ] Implement native Bluetooth HCI adapter driver and Android Wi-Fi Direct socket listener.
 - [x] Implement cross-protocol voice and video media gateway aggregation bridging WebRTC, Matrix VoIP, and Discord voice in `omnicore-engine/src/call.rs`.
 - [x] Implement optimal cascade routing with automated circuit-breaker bypass and metric updates in `omnicore-engine/src/router.rs`.
 - [x] Implement RTP jitter buffer with sequence reordering and packet loss concealment in `omnicore-engine/src/call.rs`.

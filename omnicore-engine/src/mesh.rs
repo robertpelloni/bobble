@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use crate::discovery::MeshTransportType;
 
 /// Outcome of processing an incoming mesh packet at this node.
@@ -81,10 +81,11 @@ impl MeshPacket {
     }
 }
 
-/// Router managing store-and-forward mesh packet queueing, loop detection, and deduplication.
+/// Router managing store-and-forward mesh packet queueing, loop detection, and deduplication with TTL cache pruning.
 pub struct MeshRouter {
     pub local_node_id: String,
-    seen_packets: HashSet<String>,
+    seen_packets: HashMap<String, u64>, // packet_id -> expiration timestamp
+    seen_ttl_seconds: u64,
     forward_queue: VecDeque<MeshPacket>,
     delivered_inbox: Vec<MeshPacket>,
 }
@@ -93,19 +94,40 @@ impl MeshRouter {
     pub fn new(local_node_id: impl Into<String>) -> Self {
         Self {
             local_node_id: local_node_id.into(),
-            seen_packets: HashSet::new(),
+            seen_packets: HashMap::new(),
+            seen_ttl_seconds: 3600, // 1 hour default TTL
             forward_queue: VecDeque::new(),
             delivered_inbox: Vec::new(),
         }
     }
 
+    pub fn with_ttl(local_node_id: impl Into<String>, ttl_seconds: u64) -> Self {
+        Self {
+            local_node_id: local_node_id.into(),
+            seen_packets: HashMap::new(),
+            seen_ttl_seconds: ttl_seconds,
+            forward_queue: VecDeque::new(),
+            delivered_inbox: Vec::new(),
+        }
+    }
+
+    /// Prunes expired packet records to prevent unbounded memory growth over extended uptimes.
+    pub fn prune_expired_seen(&mut self, current_time: u64) -> usize {
+        let initial_len = self.seen_packets.len();
+        self.seen_packets.retain(|_, &mut exp| exp > current_time);
+        initial_len - self.seen_packets.len()
+    }
+
     /// Ingests an incoming mesh packet from a local transport.
     pub fn process_incoming_packet(&mut self, packet: MeshPacket) -> PacketProcessingResult {
-        // 1. Check for duplicates
-        if self.seen_packets.contains(&packet.header.packet_id) {
-            return PacketProcessingResult::Dropped(DropReason::DuplicatePacket);
+        let now = packet.timestamp;
+        // 1. Check for duplicates in seen cache
+        if let Some(&expires_at) = self.seen_packets.get(&packet.header.packet_id) {
+            if expires_at > now {
+                return PacketProcessingResult::Dropped(DropReason::DuplicatePacket);
+            }
         }
-        self.seen_packets.insert(packet.header.packet_id.clone());
+        self.seen_packets.insert(packet.header.packet_id.clone(), now + self.seen_ttl_seconds);
 
         // 2. Check if addressed to us
         if packet.header.destination_unified_id == self.local_node_id {
@@ -145,6 +167,66 @@ impl MeshRouter {
     /// Returns references to all packets successfully delivered to the local node.
     pub fn delivered_packets(&self) -> &[MeshPacket] {
         &self.delivered_inbox
+    }
+
+    pub fn seen_packet_count(&self) -> usize {
+        self.seen_packets.len()
+    }
+}
+
+/// Represents an attached mesh transport peer channel (e.g. BLE GATT characteristic or Wi-Fi Direct socket).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MeshPeerChannel {
+    pub peer_id: String,
+    pub transport: MeshTransportType,
+    pub is_connected: bool,
+}
+
+/// Daemon coordinating mesh transports and dispatching packets across physical interfaces.
+pub struct MeshTransportDaemon {
+    router: MeshRouter,
+    channels: Vec<MeshPeerChannel>,
+}
+
+impl MeshTransportDaemon {
+    pub fn new(local_node_id: impl Into<String>) -> Self {
+        Self {
+            router: MeshRouter::new(local_node_id),
+            channels: Vec::new(),
+        }
+    }
+
+    pub fn attach_channel(&mut self, peer_id: impl Into<String>, transport: MeshTransportType) {
+        self.channels.push(MeshPeerChannel {
+            peer_id: peer_id.into(),
+            transport,
+            is_connected: true,
+        });
+    }
+
+    pub fn connected_channel_count(&self) -> usize {
+        self.channels.iter().filter(|c| c.is_connected).count()
+    }
+
+    pub fn router_mut(&mut self) -> &mut MeshRouter {
+        &mut self.router
+    }
+
+    pub fn router(&self) -> &MeshRouter {
+        &self.router
+    }
+
+    /// Broadcasts the next queued forward packet across all matching connected transport channels.
+    pub fn dispatch_next_forward(&mut self) -> Option<(MeshPacket, usize)> {
+        if let Some(packet) = self.router.next_forward_packet() {
+            let matching_channels = self.channels
+                .iter()
+                .filter(|c| c.is_connected && c.transport == packet.header.transport)
+                .count();
+            Some((packet, matching_channels))
+        } else {
+            None
+        }
     }
 }
 
@@ -243,5 +325,60 @@ mod tests {
 
         let result = router.process_incoming_packet(packet);
         assert_eq!(result, PacketProcessingResult::Dropped(DropReason::RoutingLoopDetected));
+    }
+
+    #[test]
+    fn test_mesh_seen_ttl_eviction() {
+        let mut router = MeshRouter::with_ttl("node_ttl", 60); // 60s TTL
+        let packet1 = MeshPacket::new(
+            "pkt_ttl_01",
+            "alice",
+            "bob",
+            3,
+            MeshTransportType::BleMesh,
+            vec![],
+            1000,
+        );
+
+        router.process_incoming_packet(packet1);
+        assert_eq!(router.seen_packet_count(), 1);
+
+        // At t=1050 (within 60s), packet is not expired
+        let pruned = router.prune_expired_seen(1050);
+        assert_eq!(pruned, 0);
+        assert_eq!(router.seen_packet_count(), 1);
+
+        // At t=1061 (past 60s TTL), packet is pruned
+        let pruned = router.prune_expired_seen(1061);
+        assert_eq!(pruned, 1);
+        assert_eq!(router.seen_packet_count(), 0);
+    }
+
+    #[test]
+    fn test_mesh_transport_daemon_dispatch() {
+        let mut daemon = MeshTransportDaemon::new("relay_daemon_1");
+        daemon.attach_channel("peer_ble_01", MeshTransportType::BleMesh);
+        daemon.attach_channel("peer_wifi_01", MeshTransportType::WifiDirect);
+
+        assert_eq!(daemon.connected_channel_count(), 2);
+
+        let packet = MeshPacket::new(
+            "pkt_fwd_01",
+            "sender_node",
+            "recipient_node",
+            4,
+            MeshTransportType::BleMesh,
+            b"ble mesh payload".to_vec(),
+            2000,
+        );
+
+        let res = daemon.router_mut().process_incoming_packet(packet);
+        assert!(matches!(res, PacketProcessingResult::ForwardQueued(_)));
+
+        // Dispatch forward packet to matching BLE channels
+        let (fwd_packet, matching_channels) = daemon.dispatch_next_forward().expect("Should dispatch queued packet");
+        assert_eq!(fwd_packet.header.packet_id, "pkt_fwd_01");
+        assert_eq!(fwd_packet.header.hop_limit, 3);
+        assert_eq!(matching_channels, 1); // Only 1 BLE channel matches
     }
 }

@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.6.7:
+  - Mesh Cache Pruning & Transport Daemon: Extended `MeshRouter` with TTL-based expiration cache (`seen_packets: HashMap<String, u64>`) and memory pruning (`prune_expired_seen`) to prevent memory leaks during long-running mesh node execution. Implemented `MeshPeerChannel` and `MeshTransportDaemon` in `omnicore-engine/src/mesh.rs` for multi-channel transport dispatching across BLE and Wi-Fi Direct.
 - 0.6.6:
   - RTP Jitter Buffer & Packet Loss Concealment (PLC): Implemented `RtpJitterBuffer` and `JitterBufferConfig` in `omnicore-engine/src/call.rs`. Provides out-of-order packet reordering, duplicate discarding, configurable playout delay thresholds, missing sequence loss detection, and synthetic comfort-noise PLC frame generation.
 - 0.6.5:

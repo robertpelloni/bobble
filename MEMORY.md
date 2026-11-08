@@ -25,7 +25,8 @@ Ongoing internal architectural observations, codebase traits, and design prefere
 - Encrypted Storage: SQLCipher with AES-256-GCM encryption (`cipher_page_size=4096`, `kdf_iter=256000`, `foreign_keys=ON`). Schema includes `contacts`, `mappings`, `threads`, `messages`, `attachments`, `key_store`, and `sync_tokens`. Complete design documented in `omnicore-engine/SCHEMA.md`.
 - Dispatcher: Multi-path timeout fallback engine in `omnicore-engine/src/dispatcher.rs` executing concurrent queues and automated protocol fallback.
 - Desktop UI: React 19 + TypeScript + Vite + TailwindCSS running inside Tauri v2 shell with system tray controls.
-- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.6.6).
+- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.6.7).
+- Mesh Cache Pruning & Daemon: `omnicore-engine/src/mesh.rs` implements `MeshRouter::prune_expired_seen` preventing memory leaks and `MeshTransportDaemon` coordinating attached BLE/Wi-Fi Direct peer channels.
 - RTP Jitter Buffer & PLC: `omnicore-engine/src/call.rs` implements `RtpJitterBuffer` for sorting out-of-order media packets, suppressing duplicates, enforcing playout delays, tracking sequence loss, and synthesizing comfort-noise PLC frames.
 - Optimal Cascade Routing: `MultipathRouter::route_with_optimal_cascade` dynamically optimizes candidate order, bypasses open circuit bridges, and records real-time latency and delivery outcomes.
 - Multi-Hop Mesh Routing: `omnicore-engine/src/mesh.rs` implements store-and-forward mesh packet queueing, cyclic loop prevention, and deduplication across BLE and Wi-Fi Direct transports.
