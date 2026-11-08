@@ -47,5 +47,6 @@ Major, long-term structural milestones and structural plans.
 - [x] Standalone compute module appliance telemetry evaluation with automated cellular LTE failover and safe shutdown policies (`telemetry.rs`).
 - [x] Multi-hop P2P mesh announcement format with hop limit decrement and transport tagging (`MeshTransportType`).
 - [x] In-memory neighbor peer discovery caching (`PeerDiscovery::cache_peer`, `get_cached_peers`).
-- [ ] Bluetooth Low Energy (BLE) / WiFi-Direct off-grid mesh packet forwarding and routing.
+- [x] Multi-hop store-and-forward mesh packet relay across BLE and Wi-Fi Direct transports (`mesh.rs`).
+- [ ] BLE background GATT service and Wi-Fi Direct socket daemon listeners.
 - [ ] End-to-end audio/video call aggregation across WebRTC and Discord gateways.

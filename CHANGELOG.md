@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.6.3:
+  - Multi-Hop Mesh Store-and-Forward Packet Relay: Implemented `MeshPacket`, `MeshHeader`, `MeshRouter`, `PacketProcessingResult`, and `DropReason` in `omnicore-engine/src/mesh.rs`. Built packet deduplication, destination delivery, visited node loop detection, and decrementing store-and-forward queueing across local transports (`BleMesh`, `WifiDirect`, `UdpBroadcast`).
 - 0.6.2:
   - Multi-Hop Mesh Propagation & Neighbor Peer Caching: Extended `omnicore-engine/src/discovery.rs` with `MeshTransportType` (`UdpBroadcast`, `BleMesh`, `WifiDirect`) and multi-hop decrement forwarding (`decrement_hop`, `hop_limit`). Implemented in-memory peer discovery cache in `PeerDiscovery` (`cache_peer`, `get_cached_peers`, `cached_peer_count`) for offline/local neighbor tracking.
 - 0.6.1:

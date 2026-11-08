@@ -40,4 +40,5 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Implement decentralized key ratchets and pre-key bundles in `omnicore-engine/src/ratchet.rs`.
 - [x] Implement compute module appliance telemetry evaluation with cellular failover and safe shutdown triggers in `omnicore-engine/src/telemetry.rs`.
 - [x] Implement multi-hop mesh announcement with hop decrement and neighbor peer caching in `omnicore-engine/src/discovery.rs`.
-- [ ] Implement multi-hop packet store-and-forward mesh relay protocol over BLE and Wi-Fi Direct.
+- [x] Implement multi-hop packet store-and-forward mesh relay protocol over BLE and Wi-Fi Direct in `omnicore-engine/src/mesh.rs`.
+- [ ] Implement BLE GATT peripheral/central service daemon for mobile and appliance mesh links.
