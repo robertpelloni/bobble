@@ -148,6 +148,34 @@ impl BridgeRegistry {
         let remaining_fallbacks = candidates[1..].to_vec();
         (chosen_primary, remaining_fallbacks)
     }
+
+    /// Selects optimal route while actively promoting starved (zero-attempt) candidates
+    /// if the default candidate exhibits elevated latency or previous failure.
+    pub fn select_optimal_route_with_probing(
+        &self,
+        primary: ProtocolKind,
+        fallbacks: &[ProtocolKind],
+        latency_probe_threshold_ms: u64,
+    ) -> (ProtocolKind, Vec<ProtocolKind>) {
+        let (mut chosen_primary, mut remaining) = self.select_optimal_route(primary, fallbacks);
+
+        let primary_latency = self.metrics.get(&chosen_primary)
+            .map(|m| m.average_latency_ms)
+            .unwrap_or(0);
+
+        // If current primary has elevated latency (> threshold), probe an unattempted starved bridge
+        if primary_latency >= latency_probe_threshold_ms {
+            if let Some(pos) = remaining.iter().position(|proto| {
+                self.metrics.get(proto).map(|m| m.total_attempts == 0).unwrap_or(true)
+            }) {
+                let starved_candidate = remaining.remove(pos);
+                remaining.insert(0, chosen_primary);
+                chosen_primary = starved_candidate;
+            }
+        }
+
+        (chosen_primary, remaining)
+    }
 }
 
 pub struct MultipathRouter {
@@ -294,6 +322,33 @@ impl MultipathRouter {
             "Multipath optimal routing failed: all candidate protocols exhausted for recipient {}",
             payload.recipient_id
         ))
+    }
+
+    /// Dispatches with active starvation prevention and probe discovery: elevates unattempted
+    /// candidate bridges if primary latency exceeds threshold, preventing traffic bottlenecks.
+    pub async fn route_with_starvation_prevention(
+        &self,
+        payload: &MessagePayload,
+        requested_primary: ProtocolKind,
+        fallbacks: &[ProtocolKind],
+        latency_probe_threshold_ms: u64,
+        now_epoch: u64,
+    ) -> Result<(ProtocolKind, DeliveryState)> {
+        let (probed_primary, probed_fallbacks) = {
+            let registry_guard = self.registry.read().await;
+            registry_guard.select_optimal_route_with_probing(
+                requested_primary,
+                fallbacks,
+                latency_probe_threshold_ms,
+            )
+        };
+
+        self.route_with_optimal_cascade(
+            payload,
+            probed_primary,
+            &probed_fallbacks,
+            now_epoch,
+        ).await
     }
 }
 
@@ -693,5 +748,50 @@ mod tests {
             }
             _ => panic!("Expected FallbackTriggered state"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_route_with_starvation_prevention_probes_unattempted_bridge() {
+        let mut registry = BridgeRegistry::new();
+
+        // 1. Matrix: high latency (2500ms > 1000ms threshold)
+        let mut matrix = MatrixBridge::new();
+        matrix.initialize().await.unwrap();
+        registry.register(ProtocolKind::Matrix, Box::new(matrix));
+        registry.record_delivery_metrics(ProtocolKind::Matrix, 2500, true, 1700000000);
+
+        // 2. Signal: unattempted (0 attempts), healthy
+        let mut signal = SignalBridge::new();
+        signal.initialize().await.unwrap();
+        registry.register(ProtocolKind::Signal, Box::new(signal));
+
+        let shared_registry = Arc::new(RwLock::new(registry));
+        let router = MultipathRouter::new(shared_registry.clone());
+
+        let payload = MessagePayload {
+            recipient_id: "+15550333".to_string(),
+            content: "Testing starvation probing elevation".to_string(),
+            fallback_protocol: "Signal".to_string(),
+        };
+
+        // Even though Matrix was requested, starvation prevention promotes unattempted Signal to probe
+        let (chosen, _) = router
+            .route_with_starvation_prevention(
+                &payload,
+                ProtocolKind::Matrix,
+                &[ProtocolKind::Signal],
+                1000, // Probe threshold 1s
+                1700000010,
+            )
+            .await
+            .expect("Starvation probing dispatch should succeed");
+
+        assert_eq!(chosen, ProtocolKind::Signal);
+
+        // Verify Signal metric was recorded from probe
+        let reg_guard = shared_registry.read().await;
+        let signal_metric = reg_guard.get_metrics(ProtocolKind::Signal).unwrap();
+        assert_eq!(signal_metric.total_attempts, 1);
+        assert_eq!(signal_metric.successful_attempts, 1);
     }
 }

@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.7.1:
+  - Starvation Prevention & Probing Discovery: Implemented `select_optimal_route_with_probing` on `BridgeRegistry` and `route_with_starvation_prevention` on `MultipathRouter` in `omnicore-engine/src/router.rs`. Automatically promotes unattempted (starved) candidate bridges to active probe status when primary bridges experience latency degradation.
 - 0.7.0:
   - Bridge Health Diagnostics & Routing Anomaly Detection: Implemented `RoutingAnomaly` and `BridgeHealthMonitor` in `omnicore-engine/src/telemetry.rs`. Automated real-time diagnostic reporting for excessive latency spikes (>1.5s), rapid repeated failure tripping, persistent circuit breaker open locks, and route candidate starvation.
 - 0.6.9:
