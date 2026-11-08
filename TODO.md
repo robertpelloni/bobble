@@ -48,3 +48,4 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Implement RTP jitter buffer with sequence reordering and packet loss concealment in `omnicore-engine/src/call.rs`.
 - [x] Harden `IMessageBridge` and `SmsBridge` with validation, retry loops, and iMessage-to-SMS fallback tests.
 - [x] Implement dynamic bit-rate scaling and frame duration adaptation in `omnicore-engine/src/call.rs`.
+- [x] Implement bridge health diagnostics and anomaly detection in `omnicore-engine/src/telemetry.rs`.
