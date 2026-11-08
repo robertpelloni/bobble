@@ -557,7 +557,7 @@ impl MultipathRouter {
             return self.route_with_optimal_cascade(payload, raced_candidates[0], &[], now_epoch).await;
         }
 
-        // Race primary against hedged candidate(s)
+        // Race candidate bridges
         let primary_cand = raced_candidates[0];
         let secondary_cand = raced_candidates[1];
 
@@ -575,7 +575,16 @@ impl MultipathRouter {
             (Some(b1), None) => {
                 let bridge = b1.read().await;
                 bridge.send_message(payload).await?;
-                return Ok((primary_cand, DeliveryState::Delivered));
+                let state = if primary_cand == primary {
+                    DeliveryState::Delivered
+                } else {
+                    DeliveryState::FallbackTriggered {
+                        from: primary,
+                        to: primary_cand,
+                        reason: "Fallback candidate selected".to_string(),
+                    }
+                };
+                return Ok((primary_cand, state));
             }
             (None, Some(b2)) => {
                 let bridge = b2.read().await;
@@ -583,7 +592,7 @@ impl MultipathRouter {
                 return Ok((
                     secondary_cand,
                     DeliveryState::FallbackTriggered {
-                        from: primary_cand,
+                        from: primary,
                         to: secondary_cand,
                         reason: "Primary bridge unpopulated in registry".to_string(),
                     },
@@ -596,48 +605,69 @@ impl MultipathRouter {
         let p2 = payload.clone();
         let delay_ms = policy.hedge_delay_ms;
 
-        let primary_future = async move {
-            let start = std::time::Instant::now();
-            let bridge = b1.read().await;
-            let res = bridge.send_message(&p1).await;
-            (primary_cand, res, start.elapsed().as_millis() as u64)
-        };
-
-        let secondary_future = async move {
-            if delay_ms > 0 {
-                tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+        let primary_task = {
+            let b1 = b1.clone();
+            async move {
+                let start = std::time::Instant::now();
+                let res = {
+                    let bridge = b1.read().await;
+                    bridge.send_message(&p1).await
+                };
+                (primary_cand, res, start.elapsed().as_millis() as u64)
             }
-            let start = std::time::Instant::now();
-            let bridge = b2.read().await;
-            let res = bridge.send_message(&p2).await;
-            (secondary_cand, res, start.elapsed().as_millis() as u64)
         };
 
-        // Pin and select biased on whichever completes successfully first
-        tokio::pin!(primary_future);
-        tokio::pin!(secondary_future);
+        let secondary_task = {
+            let b2 = b2.clone();
+            async move {
+                if delay_ms > 0 {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                }
+                let start = std::time::Instant::now();
+                let res = {
+                    let bridge = b2.read().await;
+                    bridge.send_message(&p2).await
+                };
+                (secondary_cand, res, start.elapsed().as_millis() as u64)
+            }
+        };
+
+        let mut primary_handle = tokio::spawn(primary_task);
+        let mut secondary_handle = tokio::spawn(secondary_task);
 
         tokio::select! {
-            (cand, res, lat) = &mut primary_future => {
+            res_prim = &mut primary_handle => {
+                let (cand, res, lat) = res_prim.map_err(|e| anyhow!("Primary task join failed: {}", e))?;
                 match res {
                     Ok(_) => {
+                        secondary_handle.abort();
                         let mut reg = self.registry.write().await;
                         reg.record_delivery_metrics(cand, lat, true, now_epoch);
-                        Ok((cand, DeliveryState::Delivered))
+                        let state = if cand == primary {
+                            DeliveryState::Delivered
+                        } else {
+                            DeliveryState::FallbackTriggered {
+                                from: primary,
+                                to: cand,
+                                reason: "Optimal candidate won hedged race".to_string(),
+                            }
+                        };
+                        Ok((cand, state))
                     }
                     Err(err) => {
-                        let mut reg = self.registry.write().await;
-                        reg.record_delivery_metrics(cand, lat, false, now_epoch);
+                        {
+                            let mut reg = self.registry.write().await;
+                            reg.record_delivery_metrics(cand, lat, false, now_epoch);
+                        }
                         eprintln!("Hedged racing primary [{}] failed: {}. Awaiting secondary...", cand.as_str(), err);
-                        // Await secondary
-                        let (sec_cand, sec_res, sec_lat) = secondary_future.await;
+                        let (sec_cand, sec_res, sec_lat) = secondary_handle.await.map_err(|e| anyhow!("Secondary task join failed: {}", e))?;
                         let mut reg2 = self.registry.write().await;
                         if sec_res.is_ok() {
                             reg2.record_delivery_metrics(sec_cand, sec_lat, true, now_epoch);
                             Ok((sec_cand, DeliveryState::FallbackTriggered {
-                                from: cand,
+                                from: primary,
                                 to: sec_cand,
-                                reason: format!("Hedged racing fallback won: primary error: {}", err),
+                                reason: format!("Hedged racing fallback won: primary candidate error: {}", err),
                             }))
                         } else {
                             reg2.record_delivery_metrics(sec_cand, sec_lat, false, now_epoch);
@@ -646,27 +676,44 @@ impl MultipathRouter {
                     }
                 }
             }
-            (cand, res, lat) = &mut secondary_future => {
+            res_sec = &mut secondary_handle => {
+                let (cand, res, lat) = res_sec.map_err(|e| anyhow!("Secondary task join failed: {}", e))?;
                 match res {
                     Ok(_) => {
+                        primary_handle.abort();
                         let mut reg = self.registry.write().await;
                         reg.record_delivery_metrics(cand, lat, true, now_epoch);
-                        Ok((cand, DeliveryState::FallbackTriggered {
-                            from: primary_cand,
-                            to: cand,
-                            reason: "Hedged race won by secondary candidate".to_string(),
-                        }))
+                        let state = if cand == primary {
+                            DeliveryState::Delivered
+                        } else {
+                            DeliveryState::FallbackTriggered {
+                                from: primary,
+                                to: cand,
+                                reason: "Hedged race won by secondary candidate".to_string(),
+                            }
+                        };
+                        Ok((cand, state))
                     }
                     Err(err) => {
-                        let mut reg = self.registry.write().await;
-                        reg.record_delivery_metrics(cand, lat, false, now_epoch);
+                        {
+                            let mut reg = self.registry.write().await;
+                            reg.record_delivery_metrics(cand, lat, false, now_epoch);
+                        }
                         eprintln!("Hedged secondary [{}] failed: {}. Awaiting primary...", cand.as_str(), err);
-                        // Await primary
-                        let (prim_cand, prim_res, prim_lat) = primary_future.await;
+                        let (prim_cand, prim_res, prim_lat) = primary_handle.await.map_err(|e| anyhow!("Primary task join failed: {}", e))?;
                         let mut reg2 = self.registry.write().await;
                         if prim_res.is_ok() {
                             reg2.record_delivery_metrics(prim_cand, prim_lat, true, now_epoch);
-                            Ok((prim_cand, DeliveryState::Delivered))
+                            let state = if prim_cand == primary {
+                                DeliveryState::Delivered
+                            } else {
+                                DeliveryState::FallbackTriggered {
+                                    from: primary,
+                                    to: prim_cand,
+                                    reason: "Primary candidate won after secondary failure".to_string(),
+                                }
+                            };
+                            Ok((prim_cand, state))
                         } else {
                             reg2.record_delivery_metrics(prim_cand, prim_lat, false, now_epoch);
                             Err(anyhow!("Hedged racing failed: both candidates failed"))

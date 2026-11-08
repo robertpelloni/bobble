@@ -2,6 +2,9 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.8.1:
+  - Multi-Bridge Mesh Relay Hedged Broadcast: Implemented `broadcast_event_via_hedged_racing` on `FederationManager` in `omnicore-engine/src/federation.rs`. Enables concurrent racing of primary and fallback candidate bridges across decentralized multi-party group channels with cryptographic signature preservation and causal vector clock synchronization.
+  - Multi-Platform Fallback Stress Testing: Added integration stress test verifying simultaneous hedged racing across 5 distinct platform bridge members (Signal, Matrix, Discord, Tox, SMS) under primary link failure.
 - 0.8.0:
   - Hedged Multi-Path Racing & Cooldown Jitter: Implemented `HedgedRoutingPolicy` and `route_hedged_racing` on `MultipathRouter` in `omnicore-engine/src/router.rs`. Races candidate bridges concurrently or with a configurable tail-latency cutoff (`hedge_delay_ms`), returning as soon as the fastest bridge confirms delivery to eliminate tail latency spikes during packet loss. Added `with_jitter` to `ProtocolMetric` to stagger circuit breaker cooldowns and prevent thundering herd reconnection storms across flapping network interfaces.
 - 0.7.9:

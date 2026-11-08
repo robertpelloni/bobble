@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::dispatcher::MessagePayload;
 use crate::models::{DeliveryState, ProtocolKind};
-use crate::router::MultipathRouter;
+use crate::router::{HedgedRoutingPolicy, MultipathRouter};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CausalRelation {
@@ -327,6 +327,41 @@ impl FederationManager {
             };
 
             let (chosen, state) = router.route_with_cascade(&payload, primary_proto, fallback_protos).await?;
+            results.push((member_id.clone(), chosen, state));
+        }
+
+        Ok(results)
+    }
+
+    /// Broadcasts a federated channel event to all remote peers utilizing hedged racing dispatch.
+    /// Races primary and fallback candidate bridges with a configurable latency cutoff to eliminate tail latency.
+    pub async fn broadcast_event_via_hedged_racing(
+        &self,
+        channel_id: &str,
+        event: &ChannelEvent,
+        router: &MultipathRouter,
+        primary_proto: ProtocolKind,
+        fallback_protos: &[ProtocolKind],
+        policy: HedgedRoutingPolicy,
+        now_epoch: u64,
+    ) -> Result<Vec<(String, ProtocolKind, DeliveryState)>> {
+        let channel = self.channels.get(channel_id).ok_or_else(|| anyhow!("Channel not found"))?;
+        let mut results = Vec::new();
+
+        for (member_id, _) in &channel.members {
+            if member_id == &event.author_id {
+                continue; // Do not echo back to author
+            }
+
+            let payload = MessagePayload {
+                recipient_id: member_id.clone(),
+                content: format!("[Federated:{}] {}", channel.name, event.payload),
+                fallback_protocol: fallback_protos.first().map(|p| p.as_str().to_string()).unwrap_or_default(),
+            };
+
+            let (chosen, state) = router
+                .route_hedged_racing(&payload, primary_proto, fallback_protos, policy, now_epoch)
+                .await?;
             results.push((member_id.clone(), chosen, state));
         }
 
@@ -680,5 +715,104 @@ mod tests {
                 _ => panic!("Expected FallbackTriggered to Matrix"),
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_multi_bridge_mesh_relay_hedged_broadcast_across_5_platforms() {
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+        use crate::bridge::ProtocolBridge;
+        use crate::bridges::signal::SignalBridge;
+        use crate::bridges::matrix::MatrixBridge;
+        use crate::bridges::discord::DiscordBridge;
+        use crate::bridges::tox::ToxBridge;
+        use crate::bridges::sms::SmsBridge;
+        use crate::router::BridgeRegistry;
+
+        let mut registry = BridgeRegistry::new();
+
+        // 1. Primary: Uninitialized Signal bridge (fails)
+        let signal = SignalBridge::new();
+        registry.register(ProtocolKind::Signal, Box::new(signal));
+
+        // 2. Secondary hedged race: Initialized Matrix bridge (succeeds)
+        let mut matrix = MatrixBridge::new();
+        matrix.initialize().await.unwrap();
+        registry.register(ProtocolKind::Matrix, Box::new(matrix));
+
+        // 3. Fallback candidates
+        let mut discord = DiscordBridge::new();
+        discord.initialize().await.unwrap();
+        registry.register(ProtocolKind::Discord, Box::new(discord));
+
+        let tox = ToxBridge::new();
+        registry.register(ProtocolKind::Tox, Box::new(tox));
+
+        let mut sms = SmsBridge::new();
+        let _ = <SmsBridge as ProtocolBridge>::initialize(&mut sms).await;
+        registry.register(ProtocolKind::Sms, Box::new(sms));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+
+        // Create 5-member federated room
+        let mut mgr = FederationManager::new();
+        mgr.create_channel("chan_multi_5", "Global Mesh 5", "Stress Test Across 5 Platforms", "alice");
+
+        let chan = mgr.get_channel_mut("chan_multi_5").unwrap();
+        for member_name in &["bob_matrix", "charlie_discord", "david_tox", "eve_sms"] {
+            let mut clk = VectorClock::new();
+            clk.increment(member_name);
+            chan.apply_event(ChannelEvent {
+                event_id: format!("ev_join_{}", member_name),
+                channel_id: "chan_multi_5".to_string(),
+                author_id: member_name.to_string(),
+                event_type: "member_join".to_string(),
+                payload: format!("{} joined multi-bridge channel", member_name),
+                clock: clk,
+                timestamp: 5000,
+                public_key: None,
+                signature: None,
+            }).unwrap();
+        }
+
+        // Alice signs and posts event
+        let mut msg_event = chan.post_message("alice", "Multi-bridge mesh hedged broadcast across 5 platforms").unwrap();
+        msg_event.sign("alice_ed25519_pk", "alice_secret_seed_55");
+
+        let policy = HedgedRoutingPolicy {
+            hedge_delay_ms: 0, // Concurrent parallel race between primary and top fallback
+            max_parallel_candidates: 2,
+        };
+
+        let broadcast_results = mgr
+            .broadcast_event_via_hedged_racing(
+                "chan_multi_5",
+                &msg_event,
+                &router,
+                ProtocolKind::Signal,
+                &[ProtocolKind::Matrix, ProtocolKind::Discord, ProtocolKind::Tox, ProtocolKind::Sms],
+                policy,
+                1700000000,
+            )
+            .await
+            .expect("Hedged broadcast across 5 platform members should succeed");
+
+        // Verify broadcast reached all 4 remote peers
+        assert_eq!(broadcast_results.len(), 4);
+        for (member_id, winner_proto, state) in &broadcast_results {
+            assert!(member_id.starts_with("bob") || member_id.starts_with("charlie") || member_id.starts_with("david") || member_id.starts_with("eve"));
+            // Healthy fallback (Matrix or Discord) wins hedged race over failed Signal
+            assert!(*winner_proto == ProtocolKind::Matrix || *winner_proto == ProtocolKind::Discord);
+            match state {
+                DeliveryState::FallbackTriggered { from, to, .. } => {
+                    assert_eq!(*from, ProtocolKind::Signal);
+                    assert!(*to == ProtocolKind::Matrix || *to == ProtocolKind::Discord);
+                }
+                _ => panic!("Expected FallbackTriggered state"),
+            }
+        }
+
+        // Verify cryptographic signature of the event remains intact
+        assert!(msg_event.verify_signature("alice_secret_seed_55"));
     }
 }

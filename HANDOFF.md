@@ -26,7 +26,8 @@ Summarize everything learned during the session that was not obvious at the star
 - The desktop frontend UI was completely redesigned and consolidated into a high-value single-page multi-pane interface in React 19 + TypeScript + TailwindCSS.
 - Cross-platform mobile shell established in `omnicore-mobile/` using React Native / Expo, providing on-device conversation feeds, transport tags, and bridge telemetry.
 - Automation scripts were created in `scripts/`: `build.sh`, `test.sh`, `dev.sh`, `run.sh`.
-- Global version is governed by `VERSION.md` (0.8.0).
+- Global version is governed by `VERSION.md` (0.8.1).
+- Multi-bridge mesh relay hedged broadcast (`broadcast_event_via_hedged_racing`) added in `omnicore-engine/src/federation.rs` with multi-platform stress test across 5 bridges.
 - Hedged multi-path racing router (`route_hedged_racing`) and dynamic circuit cooldown jitter implemented in `omnicore-engine/src/router.rs`.
 - Hardware video decoder pipeline with IDR synchronization (`HardwareVideoDecoder`) added in `omnicore-engine/src/call.rs`.
 - Replay attack protection with nonce caching (`NonceReplayCache`) added in `omnicore-engine/src/router.rs`.
