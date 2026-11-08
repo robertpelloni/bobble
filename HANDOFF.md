@@ -26,7 +26,8 @@ Summarize everything learned during the session that was not obvious at the star
 - The desktop frontend UI was completely redesigned and consolidated into a high-value single-page multi-pane interface in React 19 + TypeScript + TailwindCSS.
 - Cross-platform mobile shell established in `omnicore-mobile/` using React Native / Expo, providing on-device conversation feeds, transport tags, and bridge telemetry.
 - Automation scripts were created in `scripts/`: `build.sh`, `test.sh`, `dev.sh`, `run.sh`.
-- Global version is governed by `VERSION.md` (0.6.3).
+- Global version is governed by `VERSION.md` (0.6.4).
+- Cross-protocol call and media gateway aggregation between WebRTC, Matrix VoIP, and Discord added to `omnicore-engine/src/call.rs`.
 - Multi-hop store-and-forward mesh packet routing, loop detection, and deduplication added to `omnicore-engine/src/mesh.rs`.
 - Milestone 6 multi-hop mesh propagation, hop decrementing, and neighbor peer caching added to `omnicore-engine/src/discovery.rs`.
 - Milestone 6 compute module hardware appliance failovers and safe shutdown logic added to `omnicore-engine/src/telemetry.rs`.

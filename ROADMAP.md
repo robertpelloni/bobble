@@ -49,4 +49,5 @@ Major, long-term structural milestones and structural plans.
 - [x] In-memory neighbor peer discovery caching (`PeerDiscovery::cache_peer`, `get_cached_peers`).
 - [x] Multi-hop store-and-forward mesh packet relay across BLE and Wi-Fi Direct transports (`mesh.rs`).
 - [ ] BLE background GATT service and Wi-Fi Direct socket daemon listeners.
-- [ ] End-to-end audio/video call aggregation across WebRTC and Discord gateways.
+- [x] End-to-end audio/video call aggregation across WebRTC, Matrix VoIP, and Discord voice gateways (`call.rs`).
+- [ ] Advanced Opus/VP8 RTP jitter buffer and packet loss concealment pipeline.

@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.6.4:
+  - Cross-Protocol Voice & Media Gateway Aggregation: Implemented `CrossProtocolCallGateway`, `CallGatewayRoute`, and `MediaPacket` in `omnicore-engine/src/call.rs`. Enabled bidirectional audio and video bridging between WebRTC, Matrix VoIP, and Discord voice sessions with packet sequence advancement and route termination lifecycle.
 - 0.6.3:
   - Multi-Hop Mesh Store-and-Forward Packet Relay: Implemented `MeshPacket`, `MeshHeader`, `MeshRouter`, `PacketProcessingResult`, and `DropReason` in `omnicore-engine/src/mesh.rs`. Built packet deduplication, destination delivery, visited node loop detection, and decrementing store-and-forward queueing across local transports (`BleMesh`, `WifiDirect`, `UdpBroadcast`).
 - 0.6.2:

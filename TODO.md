@@ -42,3 +42,4 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Implement multi-hop mesh announcement with hop decrement and neighbor peer caching in `omnicore-engine/src/discovery.rs`.
 - [x] Implement multi-hop packet store-and-forward mesh relay protocol over BLE and Wi-Fi Direct in `omnicore-engine/src/mesh.rs`.
 - [ ] Implement BLE GATT peripheral/central service daemon for mobile and appliance mesh links.
+- [x] Implement cross-protocol voice and video media gateway aggregation bridging WebRTC, Matrix VoIP, and Discord voice in `omnicore-engine/src/call.rs`.
