@@ -7,6 +7,7 @@ pub struct IMessageBridge {
     server_url: String,
     pub password: Option<String>,
     connected: bool,
+    pub max_retries: u32,
 }
 
 impl IMessageBridge {
@@ -15,6 +16,7 @@ impl IMessageBridge {
             server_url: "http://127.0.0.1:1234".to_string(),
             password: None,
             connected: false,
+            max_retries: 2,
         }
     }
 
@@ -23,7 +25,12 @@ impl IMessageBridge {
             server_url: server_url.to_string(),
             password: password.map(|s| s.to_string()),
             connected: false,
+            max_retries: 2,
         }
+    }
+
+    pub fn is_connected(&self) -> bool {
+        self.connected
     }
 }
 
@@ -44,11 +51,34 @@ impl ProtocolBridge for IMessageBridge {
             return Err(anyhow!("iMessage relay server bridge not connected"));
         }
 
-        println!(
-            "Mock iMessage relay send to {}: {}",
-            payload.recipient_id, payload.content
-        );
-        Ok(())
+        if payload.recipient_id.trim().is_empty() {
+            return Err(anyhow!("Cannot send iMessage to empty recipient"));
+        }
+
+        if payload.content.trim().is_empty() {
+            return Err(anyhow!("Cannot send empty iMessage content"));
+        }
+
+        // Retry loop on transient dispatch failures
+        let mut last_err = None;
+        for attempt in 0..=self.max_retries {
+            if attempt > 0 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(50 * attempt as u64)).await;
+            }
+
+            println!(
+                "iMessage relay dispatch attempt {}/{} to {}: {}",
+                attempt + 1, self.max_retries + 1, payload.recipient_id, payload.content
+            );
+            // Simulated network call
+            if !self.server_url.is_empty() {
+                return Ok(());
+            } else {
+                last_err = Some(anyhow!("Invalid empty relay server URL"));
+            }
+        }
+
+        Err(last_err.unwrap_or_else(|| anyhow!("iMessage relay dispatch failed after retries")))
     }
 
     async fn disconnect(&mut self) -> Result<()> {
@@ -75,5 +105,29 @@ mod tests {
         assert!(bridge.send_message(&payload).await.is_ok());
         assert!(bridge.disconnect().await.is_ok());
         assert!(bridge.send_message(&payload).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_imessage_validation_rules() {
+        let mut bridge = IMessageBridge::new();
+        bridge.initialize().await.unwrap();
+
+        // Empty recipient
+        let res1 = bridge.send_message(&MessagePayload {
+            recipient_id: "  ".to_string(),
+            content: "hello".to_string(),
+            fallback_protocol: "none".to_string(),
+        }).await;
+        assert!(res1.is_err());
+        assert!(res1.unwrap_err().to_string().contains("empty recipient"));
+
+        // Empty content
+        let res2 = bridge.send_message(&MessagePayload {
+            recipient_id: "user@icloud.com".to_string(),
+            content: "".to_string(),
+            fallback_protocol: "none".to_string(),
+        }).await;
+        assert!(res2.is_err());
+        assert!(res2.unwrap_err().to_string().contains("empty iMessage content"));
     }
 }

@@ -657,4 +657,41 @@ mod tests {
         assert_eq!(matrix_metric.successful_attempts, 1);
         assert_eq!(matrix_metric.circuit_state, CircuitState::Closed);
     }
+
+    #[tokio::test]
+    async fn test_multipath_router_imessage_to_sms_cascade() {
+        use crate::bridges::imessage::IMessageBridge;
+
+        let mut registry = BridgeRegistry::new();
+        // 1. Primary: Uninitialized iMessage bridge (will fail)
+        let imessage = IMessageBridge::new();
+        registry.register(ProtocolKind::IMessage, Box::new(imessage));
+
+        // 2. Fallback: Initialized SMS modem bridge (will succeed)
+        let mut sms = SmsBridge::new();
+        let _ = <SmsBridge as ProtocolBridge>::initialize(&mut sms).await;
+        registry.register(ProtocolKind::Sms, Box::new(sms));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+
+        let payload = MessagePayload {
+            recipient_id: "+15550999".to_string(),
+            content: "iMessage failover to cellular SMS test".to_string(),
+            fallback_protocol: "SMS".to_string(),
+        };
+
+        let (chosen, state) = router
+            .route_with_cascade(&payload, ProtocolKind::IMessage, &[ProtocolKind::Sms])
+            .await
+            .expect("iMessage to SMS cascade should succeed");
+
+        assert_eq!(chosen, ProtocolKind::Sms);
+        match state {
+            DeliveryState::FallbackTriggered { from, to, .. } => {
+                assert_eq!(from, ProtocolKind::IMessage);
+                assert_eq!(to, ProtocolKind::Sms);
+            }
+            _ => panic!("Expected FallbackTriggered state"),
+        }
+    }
 }

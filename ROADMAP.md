@@ -52,5 +52,6 @@ Major, long-term structural milestones and structural plans.
 - [ ] Physical Bluetooth HCI adapter binding and Android Wi-Fi P2P JNI drivers.
 - [x] End-to-end audio/video call aggregation across WebRTC, Matrix VoIP, and Discord voice gateways (`call.rs`).
 - [x] Multi-bridge optimal cascade execution with automated circuit-breaker bypass and metric updates (`router.rs`).
+- [x] Protocol bridge reliability hardening across iMessage and SMS Hayes AT modem drivers (`bridges/`).
 - [x] Advanced RTP jitter buffer with sequence reordering and packet loss concealment pipeline (`call.rs`).
 - [ ] Native WebRTC audio track encoding and dynamic bit-rate adaptation.

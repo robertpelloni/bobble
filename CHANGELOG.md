@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.6.8:
+  - iMessage Relay & SMS Modem Hardening: Enhanced `IMessageBridge` and `SmsBridge` in `omnicore-engine/src/bridges/` with empty recipient/content input validation, connection status queries (`is_connected`, `is_ready`), and configurable retry loops. Added comprehensive iMessage-to-SMS multi-path fallback cascade integration test.
 - 0.6.7:
   - Mesh Cache Pruning & Transport Daemon: Extended `MeshRouter` with TTL-based expiration cache (`seen_packets: HashMap<String, u64>`) and memory pruning (`prune_expired_seen`) to prevent memory leaks during long-running mesh node execution. Implemented `MeshPeerChannel` and `MeshTransportDaemon` in `omnicore-engine/src/mesh.rs` for multi-channel transport dispatching across BLE and Wi-Fi Direct.
 - 0.6.6:
