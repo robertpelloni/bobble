@@ -65,4 +65,5 @@ Major, long-term structural milestones and structural plans.
 - [x] Dynamic spatial downsampling and color conversion pipeline (`VideoColorConverter` in `call.rs`).
 - [x] Hardware-accelerated VAAPI/VideoToolbox encoder backend drivers (`HardwareVideoEncoder` in `call.rs`).
 - [x] Hardware-accelerated NVDEC/V4L2 hardware video decoder pipeline (`HardwareVideoDecoder` in `call.rs`).
+- [x] Hedged multi-path racing router (`route_hedged_racing`) with tail-latency hedging cutoff and circuit breaker dynamic cooldown jitter (`router.rs`).
 - [ ] Full Milestone 6 verification and multi-node hardware test suite.

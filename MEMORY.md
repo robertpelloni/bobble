@@ -25,7 +25,9 @@ Ongoing internal architectural observations, codebase traits, and design prefere
 - Encrypted Storage: SQLCipher with AES-256-GCM encryption (`cipher_page_size=4096`, `kdf_iter=256000`, `foreign_keys=ON`). Schema includes `contacts`, `mappings`, `threads`, `messages`, `attachments`, `key_store`, and `sync_tokens`. Complete design documented in `omnicore-engine/SCHEMA.md`.
 - Dispatcher: Multi-path timeout fallback engine in `omnicore-engine/src/dispatcher.rs` executing concurrent queues and automated protocol fallback.
 - Desktop UI: React 19 + TypeScript + Vite + TailwindCSS running inside Tauri v2 shell with system tray controls.
-- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.7.9).
+- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.8.0).
+- Hedged Multi-Path Racing: `MultipathRouter::route_hedged_racing` in `omnicore-engine/src/router.rs` races primary and fallback bridges concurrently or with a configurable tail-latency cutoff (`HedgedRoutingPolicy`) to minimize latency under packet loss.
+- Circuit Cooldown Jitter: `ProtocolMetric::with_jitter` adds dynamic jitter to circuit breaker cooldowns, preventing thundering herd reconnect storms across flapping networks.
 - Hardware Video Decoder: `omnicore-engine/src/call.rs` implements `HardwareVideoDecoder` supporting V4L2 M2M, NVDEC, VideoToolbox, and software OpenH264 fallback with IDR keyframe synchronization.
 - Replay Attack Protection: `omnicore-engine/src/router.rs` implements `NonceReplayCache` and `RoutedPacketEnvelope` ensuring nonces cannot be replayed across alternate routing bridges.
 - Hardware Video Encoder: `omnicore-engine/src/call.rs` implements `HardwareVideoEncoder` supporting VA-API, VideoToolbox, NVENC, and software OpenH264 fallback with NALU compression.

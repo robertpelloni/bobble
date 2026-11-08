@@ -837,7 +837,8 @@ impl HardwareVideoEncoder {
         }
 
         self.encoded_frames_count += 1;
-        let is_keyframe = self.encoded_frames_count == 1 || (self.encoded_frames_count % self.config.keyframe_interval as u64 == 0);
+        let keyframe_interval = (self.config.keyframe_interval as u64).max(1);
+        let is_keyframe = self.encoded_frames_count == 1 || (self.encoded_frames_count % keyframe_interval == 0);
 
         // Synthetic NALU packetization: standard H.264 start code (0x00, 0x00, 0x00, 0x01)
         let nalu_type = if is_keyframe { 5 } else { 1 };

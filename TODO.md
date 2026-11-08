@@ -58,3 +58,4 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Implement dynamic spatial downsampling and YUV color space conversion in `omnicore-engine/src/call.rs`.
 - [x] Implement hardware-accelerated video encoder drivers and software fallback in `omnicore-engine/src/call.rs`.
 - [x] Implement hardware-accelerated video decoder pipeline and IDR synchronization in `omnicore-engine/src/call.rs`.
+- [x] Implement hedged multi-path racing router and circuit dynamic cooldown jitter in `omnicore-engine/src/router.rs`.

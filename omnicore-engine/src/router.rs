@@ -103,6 +103,7 @@ pub struct ProtocolMetric {
     pub last_failure_epoch_sec: u64,
     pub failure_threshold: u32,
     pub cooldown_sec: u64,
+    pub cooldown_jitter_sec: u64,
 }
 
 impl Default for ProtocolMetric {
@@ -116,16 +117,19 @@ impl Default for ProtocolMetric {
             last_failure_epoch_sec: 0,
             failure_threshold: 3,
             cooldown_sec: 30,
+            cooldown_jitter_sec: 0,
         }
     }
 }
 
 impl ProtocolMetric {
+    /// Checks availability, computing effective cooldown with dynamic jitter to avoid thundering herd.
     pub fn is_available_at(&mut self, now_epoch: u64) -> bool {
         match self.circuit_state {
             CircuitState::Closed => true,
             CircuitState::Open => {
-                if now_epoch >= self.last_failure_epoch_sec.saturating_add(self.cooldown_sec) {
+                let effective_cooldown = self.cooldown_sec.saturating_add(self.cooldown_jitter_sec);
+                if now_epoch >= self.last_failure_epoch_sec.saturating_add(effective_cooldown) {
                     self.circuit_state = CircuitState::HalfOpen;
                     true
                 } else {
@@ -133,6 +137,31 @@ impl ProtocolMetric {
                 }
             }
             CircuitState::HalfOpen => true,
+        }
+    }
+
+    /// Sets dynamic jitter in seconds to stagger recovery of flapping bridges.
+    pub fn with_jitter(mut self, jitter_sec: u64) -> Self {
+        self.cooldown_jitter_sec = jitter_sec;
+        self
+    }
+}
+
+/// Configuration policy for hedged racing dispatch across candidate bridges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HedgedRoutingPolicy {
+    /// Milliseconds to wait before launching parallel hedged dispatch on secondary candidate.
+    /// If 0, both candidate bridges are launched immediately in parallel.
+    pub hedge_delay_ms: u64,
+    /// Maximum parallel candidate bridges raced concurrently.
+    pub max_parallel_candidates: usize,
+}
+
+impl Default for HedgedRoutingPolicy {
+    fn default() -> Self {
+        Self {
+            hedge_delay_ms: 150,
+            max_parallel_candidates: 2,
         }
     }
 }
@@ -476,6 +505,176 @@ impl MultipathRouter {
             fallbacks,
             now_epoch,
         ).await
+    }
+
+    /// Hedged racing dispatch: dispatches across top candidate bridges concurrently
+    /// or with a hedging delay, returning as soon as the fastest candidate confirms delivery.
+    /// This eliminates tail latency spikes under transient network degradation and packet drop.
+    pub async fn route_hedged_racing(
+        &self,
+        payload: &MessagePayload,
+        primary: ProtocolKind,
+        fallbacks: &[ProtocolKind],
+        policy: HedgedRoutingPolicy,
+        now_epoch: u64,
+    ) -> Result<(ProtocolKind, DeliveryState)> {
+        // Step 1: Select optimal candidate ordering
+        let (chosen_primary, reordered_fallbacks) = {
+            let registry_guard = self.registry.read().await;
+            registry_guard.select_optimal_route(primary, fallbacks)
+        };
+
+        let mut candidate_chain = vec![chosen_primary];
+        candidate_chain.extend(reordered_fallbacks);
+
+        // Filter out candidates with open circuits
+        let mut available_candidates = Vec::new();
+        {
+            let mut registry_guard = self.registry.write().await;
+            for candidate in candidate_chain {
+                let avail = if let Some(m) = registry_guard.metrics.get_mut(&candidate) {
+                    m.is_available_at(now_epoch)
+                } else {
+                    true
+                };
+                if avail {
+                    available_candidates.push(candidate);
+                }
+            }
+        }
+
+        if available_candidates.is_empty() {
+            return Err(anyhow!(
+                "Hedged racing dispatch failed: all candidate circuits are OPEN or unavailable"
+            ));
+        }
+
+        let max_race = policy.max_parallel_candidates.max(1).min(available_candidates.len());
+        let raced_candidates = &available_candidates[..max_race];
+
+        // If only 1 candidate to race, execute normal cascade
+        if raced_candidates.len() == 1 {
+            return self.route_with_optimal_cascade(payload, raced_candidates[0], &[], now_epoch).await;
+        }
+
+        // Race primary against hedged candidate(s)
+        let primary_cand = raced_candidates[0];
+        let secondary_cand = raced_candidates[1];
+
+        let bridge_primary_opt = {
+            let reg = self.registry.read().await;
+            reg.get(primary_cand)
+        };
+        let bridge_secondary_opt = {
+            let reg = self.registry.read().await;
+            reg.get(secondary_cand)
+        };
+
+        let (b1, b2) = match (bridge_primary_opt, bridge_secondary_opt) {
+            (Some(b1), Some(b2)) => (b1, b2),
+            (Some(b1), None) => {
+                let bridge = b1.read().await;
+                bridge.send_message(payload).await?;
+                return Ok((primary_cand, DeliveryState::Delivered));
+            }
+            (None, Some(b2)) => {
+                let bridge = b2.read().await;
+                bridge.send_message(payload).await?;
+                return Ok((
+                    secondary_cand,
+                    DeliveryState::FallbackTriggered {
+                        from: primary_cand,
+                        to: secondary_cand,
+                        reason: "Primary bridge unpopulated in registry".to_string(),
+                    },
+                ));
+            }
+            (None, None) => return Err(anyhow!("No valid bridges found to race")),
+        };
+
+        let p1 = payload.clone();
+        let p2 = payload.clone();
+        let delay_ms = policy.hedge_delay_ms;
+
+        let primary_future = async move {
+            let start = std::time::Instant::now();
+            let bridge = b1.read().await;
+            let res = bridge.send_message(&p1).await;
+            (primary_cand, res, start.elapsed().as_millis() as u64)
+        };
+
+        let secondary_future = async move {
+            if delay_ms > 0 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+            }
+            let start = std::time::Instant::now();
+            let bridge = b2.read().await;
+            let res = bridge.send_message(&p2).await;
+            (secondary_cand, res, start.elapsed().as_millis() as u64)
+        };
+
+        // Pin and select biased on whichever completes successfully first
+        tokio::pin!(primary_future);
+        tokio::pin!(secondary_future);
+
+        tokio::select! {
+            (cand, res, lat) = &mut primary_future => {
+                match res {
+                    Ok(_) => {
+                        let mut reg = self.registry.write().await;
+                        reg.record_delivery_metrics(cand, lat, true, now_epoch);
+                        Ok((cand, DeliveryState::Delivered))
+                    }
+                    Err(err) => {
+                        let mut reg = self.registry.write().await;
+                        reg.record_delivery_metrics(cand, lat, false, now_epoch);
+                        eprintln!("Hedged racing primary [{}] failed: {}. Awaiting secondary...", cand.as_str(), err);
+                        // Await secondary
+                        let (sec_cand, sec_res, sec_lat) = secondary_future.await;
+                        let mut reg2 = self.registry.write().await;
+                        if sec_res.is_ok() {
+                            reg2.record_delivery_metrics(sec_cand, sec_lat, true, now_epoch);
+                            Ok((sec_cand, DeliveryState::FallbackTriggered {
+                                from: cand,
+                                to: sec_cand,
+                                reason: format!("Hedged racing fallback won: primary error: {}", err),
+                            }))
+                        } else {
+                            reg2.record_delivery_metrics(sec_cand, sec_lat, false, now_epoch);
+                            Err(anyhow!("Hedged racing failed: both candidates failed"))
+                        }
+                    }
+                }
+            }
+            (cand, res, lat) = &mut secondary_future => {
+                match res {
+                    Ok(_) => {
+                        let mut reg = self.registry.write().await;
+                        reg.record_delivery_metrics(cand, lat, true, now_epoch);
+                        Ok((cand, DeliveryState::FallbackTriggered {
+                            from: primary_cand,
+                            to: cand,
+                            reason: "Hedged race won by secondary candidate".to_string(),
+                        }))
+                    }
+                    Err(err) => {
+                        let mut reg = self.registry.write().await;
+                        reg.record_delivery_metrics(cand, lat, false, now_epoch);
+                        eprintln!("Hedged secondary [{}] failed: {}. Awaiting primary...", cand.as_str(), err);
+                        // Await primary
+                        let (prim_cand, prim_res, prim_lat) = primary_future.await;
+                        let mut reg2 = self.registry.write().await;
+                        if prim_res.is_ok() {
+                            reg2.record_delivery_metrics(prim_cand, prim_lat, true, now_epoch);
+                            Ok((prim_cand, DeliveryState::Delivered))
+                        } else {
+                            reg2.record_delivery_metrics(prim_cand, prim_lat, false, now_epoch);
+                            Err(anyhow!("Hedged racing failed: both candidates failed"))
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1027,5 +1226,99 @@ mod tests {
 
         assert!(replay_res.is_err());
         assert!(replay_res.unwrap_err().to_string().contains("Replay attack detected"));
+    }
+
+    #[test]
+    fn test_circuit_breaker_dynamic_jitter_cooldown() {
+        let mut metric = ProtocolMetric {
+            failure_threshold: 3,
+            cooldown_sec: 20,
+            consecutive_failures: 3,
+            last_failure_epoch_sec: 1700000000,
+            circuit_state: CircuitState::Open,
+            ..Default::default()
+        }.with_jitter(15); // Adds 15s jitter -> total effective cooldown = 35s
+
+        // Before base cooldown + jitter expires (e.g. 25s elapsed)
+        assert!(!metric.is_available_at(1700000025));
+        assert_eq!(metric.circuit_state, CircuitState::Open);
+
+        // After jittered cooldown expires (36s elapsed)
+        assert!(metric.is_available_at(1700000036));
+        assert_eq!(metric.circuit_state, CircuitState::HalfOpen);
+    }
+
+    #[tokio::test]
+    async fn test_route_hedged_racing_primary_success() {
+        let mut registry = BridgeRegistry::new();
+
+        let mut signal = SignalBridge::new();
+        signal.initialize().await.unwrap();
+        registry.register(ProtocolKind::Signal, Box::new(signal));
+
+        let mut matrix = MatrixBridge::new();
+        matrix.initialize().await.unwrap();
+        registry.register(ProtocolKind::Matrix, Box::new(matrix));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+
+        let payload = MessagePayload {
+            recipient_id: "+15551212".to_string(),
+            content: "Hedged primary win test".to_string(),
+            fallback_protocol: "Matrix".to_string(),
+        };
+
+        let policy = HedgedRoutingPolicy {
+            hedge_delay_ms: 10,
+            max_parallel_candidates: 2,
+        };
+
+        let (winner, state) = router
+            .route_hedged_racing(&payload, ProtocolKind::Signal, &[ProtocolKind::Matrix], policy, 1700000000)
+            .await
+            .expect("Hedged racing should succeed");
+
+        assert_eq!(winner, ProtocolKind::Signal);
+        assert_eq!(state, DeliveryState::Delivered);
+    }
+
+    #[tokio::test]
+    async fn test_route_hedged_racing_secondary_wins_when_primary_fails() {
+        let mut registry = BridgeRegistry::new();
+
+        // Signal bridge uninitialized (will fail immediate attempt)
+        let signal = SignalBridge::new();
+        registry.register(ProtocolKind::Signal, Box::new(signal));
+
+        // Matrix bridge initialized (succeeds)
+        let mut matrix = MatrixBridge::new();
+        matrix.initialize().await.unwrap();
+        registry.register(ProtocolKind::Matrix, Box::new(matrix));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+
+        let payload = MessagePayload {
+            recipient_id: "+15553434".to_string(),
+            content: "Hedged secondary win test".to_string(),
+            fallback_protocol: "Matrix".to_string(),
+        };
+
+        let policy = HedgedRoutingPolicy {
+            hedge_delay_ms: 0, // Concurrent parallel launch
+            max_parallel_candidates: 2,
+        };
+
+        let (winner, state) = router
+            .route_hedged_racing(&payload, ProtocolKind::Signal, &[ProtocolKind::Matrix], policy, 1700000000)
+            .await
+            .expect("Hedged secondary candidate should deliver successfully");
+
+        assert_eq!(winner, ProtocolKind::Matrix);
+        match state {
+            DeliveryState::FallbackTriggered { to, .. } => {
+                assert_eq!(to, ProtocolKind::Matrix);
+            }
+            _ => panic!("Expected fallback delivery state"),
+        }
     }
 }
