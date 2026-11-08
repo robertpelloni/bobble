@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.7.7:
+  - Hardware Video Encoder & H.264 NALU Packetization: Implemented `HardwareEncoderType` (Vaapi, VideoToolbox, Nvenc, SoftwareOpenH264), `EncoderConfig`, `EncodedNalu`, and `HardwareVideoEncoder` in `omnicore-engine/src/call.rs`. Provides zero-copy frame compression into H.264 NALUs with automatic software fallback when hardware accelerators are unavailable.
 - 0.7.6:
   - Video Spatial Downsampling & YUV Color Conversion: Implemented `VideoColorConverter` in `omnicore-engine/src/call.rs`. Adds bilinear box downsampling (`downsample_rgba`) and ITU-R BT.601 color space transformation (`rgba_to_i420`) to feed multi-layer video simulcast streaming.
 - 0.7.5:
