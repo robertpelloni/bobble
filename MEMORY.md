@@ -25,7 +25,8 @@ Ongoing internal architectural observations, codebase traits, and design prefere
 - Encrypted Storage: SQLCipher with AES-256-GCM encryption (`cipher_page_size=4096`, `kdf_iter=256000`, `foreign_keys=ON`). Schema includes `contacts`, `mappings`, `threads`, `messages`, `attachments`, `key_store`, and `sync_tokens`. Complete design documented in `omnicore-engine/SCHEMA.md`.
 - Dispatcher: Multi-path timeout fallback engine in `omnicore-engine/src/dispatcher.rs` executing concurrent queues and automated protocol fallback.
 - Desktop UI: React 19 + TypeScript + Vite + TailwindCSS running inside Tauri v2 shell with system tray controls.
-- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.6.4).
+- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.6.5).
+- Optimal Cascade Routing: `MultipathRouter::route_with_optimal_cascade` dynamically optimizes candidate order, bypasses open circuit bridges, and records real-time latency and delivery outcomes.
 - Multi-Hop Mesh Routing: `omnicore-engine/src/mesh.rs` implements store-and-forward mesh packet queueing, cyclic loop prevention, and deduplication across BLE and Wi-Fi Direct transports.
 - Cross-Protocol Call Gateway: `omnicore-engine/src/call.rs` implements `CrossProtocolCallGateway` bridging WebRTC, Matrix VoIP, and Discord voice calls with RTP sequence translation.
 - Hardware Appliance Routing: `omnicore-engine/src/telemetry.rs` implements `ApplianceConfig` to trigger cellular LTE modem failover during power outages and execute thermal/battery safe shutdowns.

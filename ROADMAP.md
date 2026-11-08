@@ -50,4 +50,5 @@ Major, long-term structural milestones and structural plans.
 - [x] Multi-hop store-and-forward mesh packet relay across BLE and Wi-Fi Direct transports (`mesh.rs`).
 - [ ] BLE background GATT service and Wi-Fi Direct socket daemon listeners.
 - [x] End-to-end audio/video call aggregation across WebRTC, Matrix VoIP, and Discord voice gateways (`call.rs`).
+- [x] Multi-bridge optimal cascade execution with automated circuit-breaker bypass and metric updates (`router.rs`).
 - [ ] Advanced Opus/VP8 RTP jitter buffer and packet loss concealment pipeline.

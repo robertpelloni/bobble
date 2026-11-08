@@ -210,6 +210,91 @@ impl MultipathRouter {
             payload.recipient_id
         ))
     }
+
+    /// Automatically optimizes candidate order using health and latency metrics,
+    /// checks circuit-breaker availability, executes cascading delivery, and updates metrics.
+    pub async fn route_with_optimal_cascade(
+        &self,
+        payload: &MessagePayload,
+        requested_primary: ProtocolKind,
+        fallbacks: &[ProtocolKind],
+        now_epoch: u64,
+    ) -> Result<(ProtocolKind, DeliveryState)> {
+        // Step 1: Compute optimal candidate priority order
+        let (chosen_primary, reordered_fallbacks) = {
+            let registry_guard = self.registry.read().await;
+            registry_guard.select_optimal_route(requested_primary, fallbacks)
+        };
+
+        let mut candidate_chain = vec![chosen_primary];
+        candidate_chain.extend(reordered_fallbacks);
+
+        let start_time = std::time::Instant::now();
+
+        // Step 2: Attempt dispatch sequentially across candidates
+        for (idx, &candidate) in candidate_chain.iter().enumerate() {
+            // Check circuit-breaker availability
+            let is_available = {
+                let mut registry_guard = self.registry.write().await;
+                if let Some(metric) = registry_guard.metrics.get_mut(&candidate) {
+                    metric.is_available_at(now_epoch)
+                } else {
+                    true
+                }
+            };
+
+            if !is_available {
+                eprintln!(
+                    "Bridge [{}] circuit is OPEN. Bypassing candidate...",
+                    candidate.as_str()
+                );
+                continue;
+            }
+
+            let bridge_opt = {
+                let registry_guard = self.registry.read().await;
+                registry_guard.get(candidate)
+            };
+
+            if let Some(bridge_ref) = bridge_opt {
+                let bridge = bridge_ref.read().await;
+                let attempt_start = std::time::Instant::now();
+                match bridge.send_message(payload).await {
+                    Ok(_) => {
+                        let latency_ms = attempt_start.elapsed().as_millis() as u64;
+                        let mut registry_guard = self.registry.write().await;
+                        registry_guard.record_delivery_metrics(candidate, latency_ms, true, now_epoch);
+
+                        let state = if idx == 0 && candidate == requested_primary {
+                            DeliveryState::Delivered
+                        } else {
+                            DeliveryState::FallbackTriggered {
+                                from: requested_primary,
+                                to: candidate,
+                                reason: format!("Optimal routing selected fallback after {}ms", start_time.elapsed().as_millis()),
+                            }
+                        };
+                        return Ok((candidate, state));
+                    }
+                    Err(e) => {
+                        let latency_ms = attempt_start.elapsed().as_millis() as u64;
+                        let mut registry_guard = self.registry.write().await;
+                        registry_guard.record_delivery_metrics(candidate, latency_ms, false, now_epoch);
+                        eprintln!(
+                            "Optimal route bridge [{}] failed: {}. Continuing cascade...",
+                            candidate.as_str(),
+                            e
+                        );
+                    }
+                }
+            }
+        }
+
+        Err(anyhow!(
+            "Multipath optimal routing failed: all candidate protocols exhausted for recipient {}",
+            payload.recipient_id
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -521,5 +606,55 @@ mod tests {
         // After cooldown expires, circuit moves to HalfOpen to probe recovery
         assert!(metric.is_available_at(post_cooldown));
         assert_eq!(metric.circuit_state, CircuitState::HalfOpen);
+    }
+
+    #[tokio::test]
+    async fn test_route_with_optimal_cascade_bypasses_open_circuit() {
+        let mut registry = BridgeRegistry::new();
+
+        // Register Signal bridge but trip its circuit
+        let signal = SignalBridge::new();
+        registry.register(ProtocolKind::Signal, Box::new(signal));
+
+        let now = 1700000000;
+        // Trip Signal circuit by recording 3 consecutive failures
+        registry.record_delivery_metrics(ProtocolKind::Signal, 10, false, now);
+        registry.record_delivery_metrics(ProtocolKind::Signal, 10, false, now);
+        registry.record_delivery_metrics(ProtocolKind::Signal, 10, false, now);
+
+        // Register healthy Matrix bridge
+        let mut matrix = MatrixBridge::new();
+        matrix.initialize().await.unwrap();
+        registry.register(ProtocolKind::Matrix, Box::new(matrix));
+
+        let shared_registry = Arc::new(RwLock::new(registry));
+        let router = MultipathRouter::new(shared_registry.clone());
+
+        let payload = MessagePayload {
+            recipient_id: "!matrix_room_opt:matrix.org".to_string(),
+            content: "Testing optimal cascade with circuit breaker".to_string(),
+            fallback_protocol: "Matrix".to_string(),
+        };
+
+        // Dispatch with optimal cascade at now + 5 (within cooldown, Signal circuit is OPEN)
+        let (chosen, state) = router
+            .route_with_optimal_cascade(&payload, ProtocolKind::Signal, &[ProtocolKind::Matrix], now + 5)
+            .await
+            .expect("Routing should bypass open Signal circuit and deliver via Matrix");
+
+        assert_eq!(chosen, ProtocolKind::Matrix);
+        match state {
+            DeliveryState::FallbackTriggered { from, to, .. } => {
+                assert_eq!(from, ProtocolKind::Signal);
+                assert_eq!(to, ProtocolKind::Matrix);
+            }
+            _ => panic!("Expected FallbackTriggered state"),
+        }
+
+        // Verify Matrix metrics were updated with success
+        let reg_guard = shared_registry.read().await;
+        let matrix_metric = reg_guard.get_metrics(ProtocolKind::Matrix).unwrap();
+        assert_eq!(matrix_metric.successful_attempts, 1);
+        assert_eq!(matrix_metric.circuit_state, CircuitState::Closed);
     }
 }

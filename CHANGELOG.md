@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.6.5:
+  - Optimal Multi-Bridge Cascade Routing & Circuit Breaker Integration: Implemented `route_with_optimal_cascade` on `MultipathRouter` in `omnicore-engine/src/router.rs`. Dynamically queries optimal candidate chains, bypasses open circuit bridges, and records real-time latency and delivery outcomes.
 - 0.6.4:
   - Cross-Protocol Voice & Media Gateway Aggregation: Implemented `CrossProtocolCallGateway`, `CallGatewayRoute`, and `MediaPacket` in `omnicore-engine/src/call.rs`. Enabled bidirectional audio and video bridging between WebRTC, Matrix VoIP, and Discord voice sessions with packet sequence advancement and route termination lifecycle.
 - 0.6.3:
