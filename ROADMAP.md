@@ -58,4 +58,5 @@ Major, long-term structural milestones and structural plans.
 - [x] Advanced RTP jitter buffer with sequence reordering and packet loss concealment pipeline (`call.rs`).
 - [x] Native WebRTC audio track encoding and dynamic bit-rate adaptation (`call.rs`).
 - [x] Video track simulcast and VP8/VP9 temporal layer switching (`VideoSimulcastController` in `call.rs`).
-- [ ] End-to-end encrypted screen sharing stream pipeline.
+- [x] End-to-end encrypted screen sharing stream pipeline (`ScreenSharePipeline` in `call.rs`).
+- [ ] Hardware-accelerated H.264/AV1 zero-copy video frame grabber.

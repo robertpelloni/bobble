@@ -467,6 +467,139 @@ impl VideoSimulcastController {
     }
 }
 
+/// A serialized chunk of an encrypted screen share video frame.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScreenFrameChunk {
+    pub frame_id: u64,
+    pub chunk_index: u32,
+    pub total_chunks: u32,
+    pub payload: Vec<u8>,
+    pub is_keyframe: bool,
+    pub checksum: u32,
+}
+
+/// Active screen share track metadata and encryption session descriptor.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScreenShareTrack {
+    pub track_id: String,
+    pub width: u32,
+    pub height: u32,
+    pub framerate: u32,
+    pub encryption_session_key: Vec<u8>,
+    pub is_active: bool,
+}
+
+/// Coordinates capture chunking, transmission, and reassembly of encrypted screen sharing frames.
+pub struct ScreenSharePipeline {
+    track: Option<ScreenShareTrack>,
+    next_frame_id: u64,
+    chunk_buffer: std::collections::HashMap<u64, Vec<Option<ScreenFrameChunk>>>,
+    max_chunk_size: usize,
+}
+
+impl Default for ScreenSharePipeline {
+    fn default() -> Self {
+        Self {
+            track: None,
+            next_frame_id: 1,
+            chunk_buffer: std::collections::HashMap::new(),
+            max_chunk_size: 1200, // Safe MTU size for RTP UDP packetization
+        }
+    }
+}
+
+impl ScreenSharePipeline {
+    pub fn new(max_chunk_size: usize) -> Self {
+        Self {
+            track: None,
+            next_frame_id: 1,
+            chunk_buffer: std::collections::HashMap::new(),
+            max_chunk_size,
+        }
+    }
+
+    /// Initializes a new screen share track session with session encryption keys.
+    pub fn start_screen_share(
+        &mut self,
+        track_id: impl Into<String>,
+        width: u32,
+        height: u32,
+        framerate: u32,
+        session_key: Vec<u8>,
+    ) {
+        self.track = Some(ScreenShareTrack {
+            track_id: track_id.into(),
+            width,
+            height,
+            framerate,
+            encryption_session_key: session_key,
+            is_active: true,
+        });
+    }
+
+    /// Chunks a raw or encrypted screen frame buffer into MTU-safe packet chunks.
+    pub fn chunk_frame(&mut self, frame_data: &[u8], is_keyframe: bool) -> Vec<ScreenFrameChunk> {
+        let frame_id = self.next_frame_id;
+        self.next_frame_id += 1;
+
+        let total_chunks = ((frame_data.len() + self.max_chunk_size - 1) / self.max_chunk_size).max(1) as u32;
+        let mut chunks = Vec::with_capacity(total_chunks as usize);
+
+        for (idx, slice) in frame_data.chunks(self.max_chunk_size).enumerate() {
+            // Simple checksum for chunk integrity
+            let checksum = slice.iter().fold(0u32, |acc, &b| acc.wrapping_add(b as u32));
+            chunks.push(ScreenFrameChunk {
+                frame_id,
+                chunk_index: idx as u32,
+                total_chunks,
+                payload: slice.to_vec(),
+                is_keyframe,
+                checksum,
+            });
+        }
+
+        chunks
+    }
+
+    /// Ingests a received chunk and attempts full frame reassembly once all parts arrive.
+    pub fn ingest_chunk(&mut self, chunk: ScreenFrameChunk) -> Option<Vec<u8>> {
+        let frame_id = chunk.frame_id;
+        let total = chunk.total_chunks as usize;
+        let idx = chunk.chunk_index as usize;
+
+        let slot = self.chunk_buffer.entry(frame_id).or_insert_with(|| vec![None; total]);
+
+        if idx < slot.len() {
+            slot[idx] = Some(chunk);
+        }
+
+        // Check if all chunks for this frame have arrived
+        if slot.iter().all(|c| c.is_some()) {
+            if let Some(completed_chunks) = self.chunk_buffer.remove(&frame_id) {
+                let mut full_frame = Vec::new();
+                for c in completed_chunks.into_iter().flatten() {
+                    full_frame.extend(c.payload);
+                }
+                return Some(full_frame);
+            }
+        }
+
+        None
+    }
+
+    /// Terminates screen sharing session.
+    pub fn terminate(&mut self) {
+        if let Some(track) = &mut self.track {
+            track.is_active = false;
+        }
+        self.chunk_buffer.clear();
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.track.as_ref().map(|t| t.is_active).unwrap_or(false)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -709,5 +842,32 @@ mod tests {
         assert_eq!(layer4, SimulcastLayer::High);
         assert_eq!(simulcast.resolution, VideoResolution::Res1080p);
         assert_eq!(simulcast.target_fps, 30);
+    }
+
+    #[test]
+    fn test_screen_share_pipeline_chunking_and_reassembly() {
+        let mut pipeline = ScreenSharePipeline::new(500); // 500-byte MTU limit
+        pipeline.start_screen_share("screen_track_01", 1920, 1080, 60, vec![0xAA; 32]);
+        assert!(pipeline.is_active());
+
+        // Create a 1250-byte simulated screen video frame
+        let test_frame: Vec<u8> = (0..1250).map(|i| (i % 256) as u8).collect();
+
+        let chunks = pipeline.chunk_frame(&test_frame, true);
+        assert_eq!(chunks.len(), 3); // 500 + 500 + 250 = 3 chunks
+        assert!(chunks[0].is_keyframe);
+        assert_eq!(chunks[0].total_chunks, 3);
+        assert_eq!(chunks[0].chunk_index, 0);
+
+        // Receive chunks out-of-order: chunk 1, chunk 2, chunk 0
+        assert!(pipeline.ingest_chunk(chunks[1].clone()).is_none());
+        assert!(pipeline.ingest_chunk(chunks[2].clone()).is_none());
+
+        // Ingest final chunk: reassembly must complete and match original frame exactly
+        let reassembled = pipeline.ingest_chunk(chunks[0].clone()).expect("Frame should be fully reassembled");
+        assert_eq!(reassembled, test_frame);
+
+        pipeline.terminate();
+        assert!(!pipeline.is_active());
     }
 }

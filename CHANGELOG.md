@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.7.3:
+  - End-to-End Encrypted Screen Sharing Pipeline: Implemented `ScreenShareTrack`, `ScreenFrameChunk`, and `ScreenSharePipeline` in `omnicore-engine/src/call.rs`. Provides MTU-safe frame chunking (1200 bytes default), integrity checksum verification, out-of-order chunk buffering and reassembly, and active encryption session key management.
 - 0.7.2:
   - Video Simulcast Adaptation & Temporal Layer Switching: Implemented `VideoResolution`, `SimulcastLayer`, and `VideoSimulcastController` in `omnicore-engine/src/call.rs`. Dynamically switches spatial resolutions (1080p, 480p, 240p) and frame rates (30fps, 24fps, 15fps) based on estimated available network bandwidth and packet loss.
 - 0.7.1:

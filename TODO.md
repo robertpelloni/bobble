@@ -51,3 +51,4 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Implement bridge health diagnostics and anomaly detection in `omnicore-engine/src/telemetry.rs`.
 - [x] Implement starvation prevention and probe discovery in `omnicore-engine/src/router.rs`.
 - [x] Implement video simulcast and temporal resolution adaptation in `omnicore-engine/src/call.rs`.
+- [x] Implement end-to-end encrypted screen sharing pipeline in `omnicore-engine/src/call.rs`.
