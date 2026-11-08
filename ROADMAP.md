@@ -43,7 +43,9 @@ Major, long-term structural milestones and structural plans.
 - Cross-platform federation and multi-tier cascade routing with circuit breakers (`router.rs`, `federation.rs`).
 - Matrix and Discord bridge delivery reliability and retry loops (`bridges/`).
 
-## Milestone 6: Autonomous Hardware Appliance & Mesh Expansion (Planned)
-- Standalone compute module daemon image with cellular LTE hat failover.
-- Bluetooth Low Energy (BLE) / WiFi-Direct off-grid mesh routing.
-- End-to-end audio/video call aggregation across WebRTC and Discord gateways.
+## Milestone 6: Autonomous Hardware Appliance & Mesh Expansion (In Progress)
+- [x] Standalone compute module appliance telemetry evaluation with automated cellular LTE failover and safe shutdown policies (`telemetry.rs`).
+- [x] Multi-hop P2P mesh announcement format with hop limit decrement and transport tagging (`MeshTransportType`).
+- [x] In-memory neighbor peer discovery caching (`PeerDiscovery::cache_peer`, `get_cached_peers`).
+- [ ] Bluetooth Low Energy (BLE) / WiFi-Direct off-grid mesh packet forwarding and routing.
+- [ ] End-to-end audio/video call aggregation across WebRTC and Discord gateways.

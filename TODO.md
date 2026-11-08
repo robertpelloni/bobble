@@ -38,3 +38,6 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Add decentralized reputation scoring and spam defense heuristics in `omnicore-engine/src/reputation.rs`.
 - [x] Implement end-to-end WebSocket proxy bridge connecting omnicore-mobile and omnicore-ui to omnicore-engine daemon in `omnicore-engine/src/server.rs`.
 - [x] Implement decentralized key ratchets and pre-key bundles in `omnicore-engine/src/ratchet.rs`.
+- [x] Implement compute module appliance telemetry evaluation with cellular failover and safe shutdown triggers in `omnicore-engine/src/telemetry.rs`.
+- [x] Implement multi-hop mesh announcement with hop decrement and neighbor peer caching in `omnicore-engine/src/discovery.rs`.
+- [ ] Implement multi-hop packet store-and-forward mesh relay protocol over BLE and Wi-Fi Direct.
