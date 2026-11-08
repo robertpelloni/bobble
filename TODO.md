@@ -44,3 +44,4 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [ ] Implement BLE GATT peripheral/central service daemon for mobile and appliance mesh links.
 - [x] Implement cross-protocol voice and video media gateway aggregation bridging WebRTC, Matrix VoIP, and Discord voice in `omnicore-engine/src/call.rs`.
 - [x] Implement optimal cascade routing with automated circuit-breaker bypass and metric updates in `omnicore-engine/src/router.rs`.
+- [x] Implement RTP jitter buffer with sequence reordering and packet loss concealment in `omnicore-engine/src/call.rs`.

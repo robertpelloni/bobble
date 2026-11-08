@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.6.6:
+  - RTP Jitter Buffer & Packet Loss Concealment (PLC): Implemented `RtpJitterBuffer` and `JitterBufferConfig` in `omnicore-engine/src/call.rs`. Provides out-of-order packet reordering, duplicate discarding, configurable playout delay thresholds, missing sequence loss detection, and synthetic comfort-noise PLC frame generation.
 - 0.6.5:
   - Optimal Multi-Bridge Cascade Routing & Circuit Breaker Integration: Implemented `route_with_optimal_cascade` on `MultipathRouter` in `omnicore-engine/src/router.rs`. Dynamically queries optimal candidate chains, bypasses open circuit bridges, and records real-time latency and delivery outcomes.
 - 0.6.4:

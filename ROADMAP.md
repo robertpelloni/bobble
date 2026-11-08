@@ -51,4 +51,5 @@ Major, long-term structural milestones and structural plans.
 - [ ] BLE background GATT service and Wi-Fi Direct socket daemon listeners.
 - [x] End-to-end audio/video call aggregation across WebRTC, Matrix VoIP, and Discord voice gateways (`call.rs`).
 - [x] Multi-bridge optimal cascade execution with automated circuit-breaker bypass and metric updates (`router.rs`).
-- [ ] Advanced Opus/VP8 RTP jitter buffer and packet loss concealment pipeline.
+- [x] Advanced RTP jitter buffer with sequence reordering and packet loss concealment pipeline (`call.rs`).
+- [ ] Native WebRTC audio track encoding and dynamic bit-rate adaptation.

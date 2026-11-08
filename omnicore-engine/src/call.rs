@@ -220,6 +220,112 @@ impl Default for CrossProtocolCallGateway {
     }
 }
 
+/// Configuration settings for the RTP Jitter Buffer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JitterBufferConfig {
+    pub max_capacity: usize,
+    pub playout_delay_packets: usize,
+}
+
+impl Default for JitterBufferConfig {
+    fn default() -> Self {
+        Self {
+            max_capacity: 64,
+            playout_delay_packets: 3,
+        }
+    }
+}
+
+/// Manages packet reordering, duplicate suppression, and loss concealment for media streams.
+pub struct RtpJitterBuffer {
+    config: JitterBufferConfig,
+    packets: Vec<MediaPacket>,
+    last_popped_sequence: Option<u32>,
+    lost_packets_count: u64,
+}
+
+impl RtpJitterBuffer {
+    pub fn new(config: JitterBufferConfig) -> Self {
+        Self {
+            config,
+            packets: Vec::new(),
+            last_popped_sequence: None,
+            lost_packets_count: 0,
+        }
+    }
+
+    /// Ingests an incoming media packet, sorting it by sequence number and discarding duplicates.
+    pub fn push_packet(&mut self, packet: MediaPacket) -> bool {
+        // Discard already played-out packets
+        if let Some(last_seq) = self.last_popped_sequence {
+            if packet.sequence <= last_seq {
+                return false;
+            }
+        }
+
+        // Check for duplicates in buffer
+        if self.packets.iter().any(|p| p.sequence == packet.sequence) {
+            return false;
+        }
+
+        self.packets.push(packet);
+        // Sort in ascending order of sequence number
+        self.packets.sort_by_key(|p| p.sequence);
+
+        // Enforce max capacity
+        if self.packets.len() > self.config.max_capacity {
+            self.packets.remove(0);
+        }
+        true
+    }
+
+    /// Pops the next ready packet from the playout queue once delay threshold is met.
+    pub fn pop_packet(&mut self) -> Option<MediaPacket> {
+        if self.packets.len() < self.config.playout_delay_packets && self.last_popped_sequence.is_none() {
+            return None;
+        }
+
+        if self.packets.is_empty() {
+            return None;
+        }
+
+        let next_packet = self.packets.remove(0);
+
+        // Detect missing sequence numbers (loss detection)
+        if let Some(last_seq) = self.last_popped_sequence {
+            if next_packet.sequence > last_seq + 1 {
+                let missing = (next_packet.sequence - (last_seq + 1)) as u64;
+                self.lost_packets_count += missing;
+            }
+        }
+
+        self.last_popped_sequence = Some(next_packet.sequence);
+        Some(next_packet)
+    }
+
+    /// Generates a synthetic packet loss concealment (PLC) frame to bridge missing audio gaps.
+    pub fn generate_plc_frame(&self, expected_sequence: u32, ssrc: u32) -> MediaPacket {
+        MediaPacket {
+            sequence: expected_sequence,
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            ssrc,
+            payload: vec![0u8; 160], // Standard 20ms silence/comfort noise frame
+            media_type: MediaType::AudioOnly,
+        }
+    }
+
+    pub fn buffered_count(&self) -> usize {
+        self.packets.len()
+    }
+
+    pub fn lost_packet_count(&self) -> u64 {
+        self.lost_packets_count
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,5 +417,104 @@ mod tests {
             },
         );
         assert!(fail_result.is_err());
+    }
+
+    #[test]
+    fn test_rtp_jitter_buffer_reordering_and_deduplication() {
+        let config = JitterBufferConfig {
+            max_capacity: 10,
+            playout_delay_packets: 3,
+        };
+        let mut jb = RtpJitterBuffer::new(config);
+
+        // Push out of order: seq 3, seq 1, seq 2
+        jb.push_packet(MediaPacket {
+            sequence: 3,
+            timestamp: 1000,
+            ssrc: 1,
+            payload: vec![3],
+            media_type: MediaType::AudioOnly,
+        });
+
+        jb.push_packet(MediaPacket {
+            sequence: 1,
+            timestamp: 1000,
+            ssrc: 1,
+            payload: vec![1],
+            media_type: MediaType::AudioOnly,
+        });
+
+        // Duplicate seq 1 should be rejected
+        let dup_added = jb.push_packet(MediaPacket {
+            sequence: 1,
+            timestamp: 1000,
+            ssrc: 1,
+            payload: vec![1],
+            media_type: MediaType::AudioOnly,
+        });
+        assert!(!dup_added);
+
+        // Playout threshold not met yet (2 packets vs threshold 3)
+        assert!(jb.pop_packet().is_none());
+
+        jb.push_packet(MediaPacket {
+            sequence: 2,
+            timestamp: 1000,
+            ssrc: 1,
+            payload: vec![2],
+            media_type: MediaType::AudioOnly,
+        });
+
+        // Threshold of 3 packets now met; packets must pop in sorted order: 1, 2, 3
+        let p1 = jb.pop_packet().expect("Should pop seq 1");
+        assert_eq!(p1.sequence, 1);
+
+        let p2 = jb.pop_packet().expect("Should pop seq 2");
+        assert_eq!(p2.sequence, 2);
+
+        let p3 = jb.pop_packet().expect("Should pop seq 3");
+        assert_eq!(p3.sequence, 3);
+
+        assert!(jb.pop_packet().is_none());
+    }
+
+    #[test]
+    fn test_rtp_jitter_buffer_loss_detection_and_plc() {
+        let config = JitterBufferConfig {
+            max_capacity: 10,
+            playout_delay_packets: 1,
+        };
+        let mut jb = RtpJitterBuffer::new(config);
+
+        jb.push_packet(MediaPacket {
+            sequence: 10,
+            timestamp: 2000,
+            ssrc: 42,
+            payload: vec![10],
+            media_type: MediaType::AudioOnly,
+        });
+
+        let p1 = jb.pop_packet().unwrap();
+        assert_eq!(p1.sequence, 10);
+
+        // Packet 11 was lost, packet 12 arrives
+        jb.push_packet(MediaPacket {
+            sequence: 12,
+            timestamp: 2020,
+            ssrc: 42,
+            payload: vec![12],
+            media_type: MediaType::AudioOnly,
+        });
+
+        let p2 = jb.pop_packet().unwrap();
+        assert_eq!(p2.sequence, 12);
+        // Loss detection counter should record 1 lost packet
+        assert_eq!(jb.lost_packet_count(), 1);
+
+        // Generate synthetic PLC concealment frame for missing seq 11
+        let plc = jb.generate_plc_frame(11, 42);
+        assert_eq!(plc.sequence, 11);
+        assert_eq!(plc.ssrc, 42);
+        assert_eq!(plc.payload.len(), 160);
     }
 }
