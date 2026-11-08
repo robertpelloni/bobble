@@ -60,4 +60,5 @@ Major, long-term structural milestones and structural plans.
 - [x] Native WebRTC audio track encoding and dynamic bit-rate adaptation (`call.rs`).
 - [x] Video track simulcast and VP8/VP9 temporal layer switching (`VideoSimulcastController` in `call.rs`).
 - [x] End-to-end encrypted screen sharing stream pipeline (`ScreenSharePipeline` in `call.rs`).
-- [ ] Hardware-accelerated H.264/AV1 zero-copy video frame grabber.
+- [x] Hardware-accelerated zero-copy video frame buffer pool and format grabber (`VideoFramePool` in `call.rs`).
+- [ ] Dynamic spatial downsampling and SIMD color conversion pipeline.

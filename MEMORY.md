@@ -25,7 +25,8 @@ Ongoing internal architectural observations, codebase traits, and design prefere
 - Encrypted Storage: SQLCipher with AES-256-GCM encryption (`cipher_page_size=4096`, `kdf_iter=256000`, `foreign_keys=ON`). Schema includes `contacts`, `mappings`, `threads`, `messages`, `attachments`, `key_store`, and `sync_tokens`. Complete design documented in `omnicore-engine/SCHEMA.md`.
 - Dispatcher: Multi-path timeout fallback engine in `omnicore-engine/src/dispatcher.rs` executing concurrent queues and automated protocol fallback.
 - Desktop UI: React 19 + TypeScript + Vite + TailwindCSS running inside Tauri v2 shell with system tray controls.
-- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.7.4).
+- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.7.5).
+- Zero-Copy Video Frame Pool: `omnicore-engine/src/call.rs` implements `VideoFramePool` managing pre-allocated reusable `RawVideoFrame` memory buffers for I420, NV12, and RGBA32 formats to eliminate GC allocation overhead during video encoding.
 - Payload Integrity Verification: `omnicore-engine/src/router.rs` implements `PayloadIntegrityGuard` and `MultipathRouter::route_with_integrity_check` verifying payload integrity before and after cascading dispatch.
 - Encrypted Screen Sharing Pipeline: `omnicore-engine/src/call.rs` implements `ScreenSharePipeline` managing MTU chunking, integrity checksums, out-of-order chunk assembly, and session encryption keys for screen video streams.
 - Video Simulcast Controller: `omnicore-engine/src/call.rs` implements `VideoSimulcastController` adjusting video spatial resolutions (1080p, 480p, 240p) and frame rates (30fps, 24fps, 15fps) across High, Medium, and Low simulcast layers.

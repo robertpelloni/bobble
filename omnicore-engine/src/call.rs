@@ -600,6 +600,88 @@ impl ScreenSharePipeline {
     }
 }
 
+/// Raw pixel formats supported by video frame grabbers and hardware encoders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VideoPixelFormat {
+    I420,   // Planar YUV 4:2:0
+    NV12,   // Semi-planar YUV 4:2:0 (hardware encoding friendly)
+    Rgba32, // 32-bit RGB with alpha (display and capture friendly)
+}
+
+/// A pre-allocated reusable video frame container supporting zero-copy data passing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawVideoFrame {
+    pub width: u32,
+    pub height: u32,
+    pub format: VideoPixelFormat,
+    pub timestamp_ns: u64,
+    pub buffer: Vec<u8>,
+}
+
+impl RawVideoFrame {
+    pub fn new(width: u32, height: u32, format: VideoPixelFormat) -> Self {
+        let size = match format {
+            VideoPixelFormat::I420 | VideoPixelFormat::NV12 => (width * height * 3 / 2) as usize,
+            VideoPixelFormat::Rgba32 => (width * height * 4) as usize,
+        };
+        Self {
+            width,
+            height,
+            format,
+            timestamp_ns: 0,
+            buffer: vec![0u8; size],
+        }
+    }
+}
+
+/// Buffer pool reusing frame memory allocations to eliminate allocation churn at high frame rates.
+pub struct VideoFramePool {
+    pool: Vec<RawVideoFrame>,
+    max_cached: usize,
+    width: u32,
+    height: u32,
+    format: VideoPixelFormat,
+}
+
+impl VideoFramePool {
+    pub fn new(width: u32, height: u32, format: VideoPixelFormat, max_cached: usize) -> Self {
+        Self {
+            pool: Vec::with_capacity(max_cached),
+            max_cached,
+            width,
+            height,
+            format,
+        }
+    }
+
+    /// Acquires a frame from the pool or allocates a new one if pool is empty.
+    pub fn acquire_frame(&mut self, timestamp_ns: u64) -> RawVideoFrame {
+        if let Some(mut frame) = self.pool.pop() {
+            frame.timestamp_ns = timestamp_ns;
+            frame
+        } else {
+            let mut frame = RawVideoFrame::new(self.width, self.height, self.format);
+            frame.timestamp_ns = timestamp_ns;
+            frame
+        }
+    }
+
+    /// Returns a processed frame back to the pool for reuse.
+    pub fn release_frame(&mut self, frame: RawVideoFrame) -> bool {
+        if frame.width == self.width && frame.height == self.height && frame.format == self.format {
+            if self.pool.len() < self.max_cached {
+                self.pool.push(frame);
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn cached_count(&self) -> usize {
+        self.pool.len()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -869,5 +951,33 @@ mod tests {
 
         pipeline.terminate();
         assert!(!pipeline.is_active());
+    }
+
+    #[test]
+    fn test_video_frame_pool_allocation_and_reuse() {
+        let mut pool = VideoFramePool::new(1280, 720, VideoPixelFormat::NV12, 4);
+        assert_eq!(pool.cached_count(), 0);
+
+        // Acquire frame from empty pool
+        let f1 = pool.acquire_frame(1_000_000);
+        assert_eq!(f1.width, 1280);
+        assert_eq!(f1.height, 720);
+        assert_eq!(f1.format, VideoPixelFormat::NV12);
+        assert_eq!(f1.buffer.len(), (1280 * 720 * 3 / 2) as usize);
+
+        // Release back to pool
+        let released = pool.release_frame(f1);
+        assert!(released);
+        assert_eq!(pool.cached_count(), 1);
+
+        // Acquire again: should reuse cached buffer
+        let f2 = pool.acquire_frame(2_000_000);
+        assert_eq!(f2.timestamp_ns, 2_000_000);
+        assert_eq!(pool.cached_count(), 0);
+
+        // Releasing frame with mismatched dimensions should be rejected
+        let mismatch_frame = RawVideoFrame::new(640, 480, VideoPixelFormat::NV12);
+        let rejected = pool.release_frame(mismatch_frame);
+        assert!(!rejected);
     }
 }

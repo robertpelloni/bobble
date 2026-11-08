@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.7.5:
+  - Zero-Copy Video Frame Capture & Buffer Pool: Implemented `VideoPixelFormat` (I420, NV12, RGBA32), `RawVideoFrame`, and `VideoFramePool` in `omnicore-engine/src/call.rs`. Eliminates allocation churn and GC pauses during high-fps video pipelines by recycling pre-allocated frame memory buffers.
 - 0.7.4:
   - Cryptographic Payload Integrity Verification: Implemented `PayloadIntegrityGuard` and `route_with_integrity_check` on `MultipathRouter` in `omnicore-engine/src/router.rs`. Validates 64-bit cryptographic payload digests before and after multi-protocol cascade dispatching to prevent content tampering or truncation across diverse networks.
 - 0.7.3:
