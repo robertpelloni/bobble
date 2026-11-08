@@ -54,3 +54,4 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Implement video simulcast and temporal resolution adaptation in `omnicore-engine/src/call.rs`.
 - [x] Implement end-to-end encrypted screen sharing pipeline in `omnicore-engine/src/call.rs`.
 - [x] Implement zero-copy video frame buffer pooling in `omnicore-engine/src/call.rs`.
+- [x] Implement dynamic spatial downsampling and YUV color space conversion in `omnicore-engine/src/call.rs`.

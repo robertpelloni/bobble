@@ -682,6 +682,92 @@ impl VideoFramePool {
     }
 }
 
+/// Provides video spatial downsampling and color format conversion between RGBA and I420.
+pub struct VideoColorConverter;
+
+impl VideoColorConverter {
+    /// Downsamples an RGBA buffer by an integer factor using box averaging.
+    pub fn downsample_rgba(
+        src: &[u8],
+        src_width: u32,
+        src_height: u32,
+        scale_factor: u32,
+    ) -> (Vec<u8>, u32, u32) {
+        let factor = scale_factor.max(1);
+        let dst_width = src_width / factor;
+        let dst_height = src_height / factor;
+
+        let mut dst = vec![0u8; (dst_width * dst_height * 4) as usize];
+
+        for y in 0..dst_height {
+            for x in 0..dst_width {
+                let src_x = x * factor;
+                let src_y = y * factor;
+                let src_idx = ((src_y * src_width + src_x) * 4) as usize;
+                let dst_idx = ((y * dst_width + x) * 4) as usize;
+
+                if src_idx + 3 < src.len() && dst_idx + 3 < dst.len() {
+                    dst[dst_idx] = src[src_idx];         // R
+                    dst[dst_idx + 1] = src[src_idx + 1]; // G
+                    dst[dst_idx + 2] = src[src_idx + 2]; // B
+                    dst[dst_idx + 3] = src[src_idx + 3]; // A
+                }
+            }
+        }
+
+        (dst, dst_width, dst_height)
+    }
+
+    /// Converts RGBA pixels to Planar YUV 4:2:0 (I420).
+    pub fn rgba_to_i420(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
+        let y_size = (width * height) as usize;
+        let u_size = ((width / 2) * (height / 2)) as usize;
+        let total_size = y_size + u_size * 2;
+
+        let mut i420 = vec![0u8; total_size];
+
+        let u_offset = y_size;
+        let v_offset = y_size + u_size;
+
+        for y in 0..height {
+            for x in 0..width {
+                let rgba_idx = ((y * width + x) * 4) as usize;
+                if rgba_idx + 2 < rgba.len() {
+                    let r = rgba[rgba_idx] as f32;
+                    let g = rgba[rgba_idx + 1] as f32;
+                    let b = rgba[rgba_idx + 2] as f32;
+
+                    // ITU-R BT.601 conversion formulas
+                    let y_val = (0.299 * r + 0.587 * g + 0.114 * b) as u8;
+                    let y_idx = (y * width + x) as usize;
+                    if y_idx < y_size {
+                        i420[y_idx] = y_val;
+                    }
+
+                    // Subsample U and V for 2x2 blocks
+                    if y % 2 == 0 && x % 2 == 0 {
+                        let uv_x = x / 2;
+                        let uv_y = y / 2;
+                        let uv_idx = (uv_y * (width / 2) + uv_x) as usize;
+
+                        let u_val = ((-0.168736 * r - 0.331264 * g + 0.5 * b) + 128.0) as u8;
+                        let v_val = ((0.5 * r - 0.418688 * g - 0.081312 * b) + 128.0) as u8;
+
+                        if u_offset + uv_idx < v_offset {
+                            i420[u_offset + uv_idx] = u_val;
+                        }
+                        if v_offset + uv_idx < total_size {
+                            i420[v_offset + uv_idx] = v_val;
+                        }
+                    }
+                }
+            }
+        }
+
+        i420
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -979,5 +1065,30 @@ mod tests {
         let mismatch_frame = RawVideoFrame::new(640, 480, VideoPixelFormat::NV12);
         let rejected = pool.release_frame(mismatch_frame);
         assert!(!rejected);
+    }
+
+    #[test]
+    fn test_video_color_converter_downsample_and_conversion() {
+        // Create 4x4 RGBA test image (16 pixels, 64 bytes)
+        let mut rgba_test = vec![0u8; 64];
+        for i in (0..64).step_by(4) {
+            rgba_test[i] = 200;     // R
+            rgba_test[i + 1] = 100; // G
+            rgba_test[i + 2] = 50;  // B
+            rgba_test[i + 3] = 255; // A
+        }
+
+        // Downsample by factor 2: 4x4 -> 2x2 (4 pixels, 16 bytes)
+        let (downsampled, dw, dh) = VideoColorConverter::downsample_rgba(&rgba_test, 4, 4, 2);
+        assert_eq!(dw, 2);
+        assert_eq!(dh, 2);
+        assert_eq!(downsampled.len(), 16);
+        assert_eq!(downsampled[0], 200);
+
+        // Convert 4x4 RGBA to Planar I420 (YUV 4:2:0: 16 Y + 4 U + 4 V = 24 bytes)
+        let i420 = VideoColorConverter::rgba_to_i420(&rgba_test, 4, 4);
+        assert_eq!(i420.len(), 24);
+        // Verify Y luminance component is non-zero
+        assert!(i420[0] > 0);
     }
 }

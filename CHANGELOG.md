@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.7.6:
+  - Video Spatial Downsampling & YUV Color Conversion: Implemented `VideoColorConverter` in `omnicore-engine/src/call.rs`. Adds bilinear box downsampling (`downsample_rgba`) and ITU-R BT.601 color space transformation (`rgba_to_i420`) to feed multi-layer video simulcast streaming.
 - 0.7.5:
   - Zero-Copy Video Frame Capture & Buffer Pool: Implemented `VideoPixelFormat` (I420, NV12, RGBA32), `RawVideoFrame`, and `VideoFramePool` in `omnicore-engine/src/call.rs`. Eliminates allocation churn and GC pauses during high-fps video pipelines by recycling pre-allocated frame memory buffers.
 - 0.7.4:

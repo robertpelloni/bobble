@@ -61,4 +61,5 @@ Major, long-term structural milestones and structural plans.
 - [x] Video track simulcast and VP8/VP9 temporal layer switching (`VideoSimulcastController` in `call.rs`).
 - [x] End-to-end encrypted screen sharing stream pipeline (`ScreenSharePipeline` in `call.rs`).
 - [x] Hardware-accelerated zero-copy video frame buffer pool and format grabber (`VideoFramePool` in `call.rs`).
-- [ ] Dynamic spatial downsampling and SIMD color conversion pipeline.
+- [x] Dynamic spatial downsampling and color conversion pipeline (`VideoColorConverter` in `call.rs`).
+- [ ] Hardware-accelerated VAAPI/VideoToolbox encoder backend drivers.

@@ -26,7 +26,8 @@ Summarize everything learned during the session that was not obvious at the star
 - The desktop frontend UI was completely redesigned and consolidated into a high-value single-page multi-pane interface in React 19 + TypeScript + TailwindCSS.
 - Cross-platform mobile shell established in `omnicore-mobile/` using React Native / Expo, providing on-device conversation feeds, transport tags, and bridge telemetry.
 - Automation scripts were created in `scripts/`: `build.sh`, `test.sh`, `dev.sh`, `run.sh`.
-- Global version is governed by `VERSION.md` (0.7.5).
+- Global version is governed by `VERSION.md` (0.7.6).
+- Video spatial downsampling and RGBA to Planar I420 conversion (`VideoColorConverter`) added in `omnicore-engine/src/call.rs`.
 - Zero-copy video frame pool and buffer reclamation (`VideoFramePool`) added in `omnicore-engine/src/call.rs`.
 - Cryptographic payload digest integrity verification (`PayloadIntegrityGuard`) added in `omnicore-engine/src/router.rs`.
 - End-to-end encrypted screen sharing pipeline (`ScreenSharePipeline`) added in `omnicore-engine/src/call.rs`.
