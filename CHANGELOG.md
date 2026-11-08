@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.7.2:
+  - Video Simulcast Adaptation & Temporal Layer Switching: Implemented `VideoResolution`, `SimulcastLayer`, and `VideoSimulcastController` in `omnicore-engine/src/call.rs`. Dynamically switches spatial resolutions (1080p, 480p, 240p) and frame rates (30fps, 24fps, 15fps) based on estimated available network bandwidth and packet loss.
 - 0.7.1:
   - Starvation Prevention & Probing Discovery: Implemented `select_optimal_route_with_probing` on `BridgeRegistry` and `route_with_starvation_prevention` on `MultipathRouter` in `omnicore-engine/src/router.rs`. Automatically promotes unattempted (starved) candidate bridges to active probe status when primary bridges experience latency degradation.
 - 0.7.0:

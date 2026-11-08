@@ -400,6 +400,73 @@ impl BitrateController {
     }
 }
 
+/// Standard video resolutions for multi-stream simulcast encoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VideoResolution {
+    Res1080p, // 1920x1080
+    Res720p,  // 1280x720
+    Res480p,  // 854x480
+    Res240p,  // 426x240
+}
+
+/// Multi-stream spatial/temporal simulcast layer tier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SimulcastLayer {
+    High,   // Highest spatial resolution (e.g. 1080p/720p @ 30fps)
+    Medium, // Medium spatial resolution (e.g. 480p @ 24fps)
+    Low,    // Fallback layer for congested channels (e.g. 240p @ 15fps)
+}
+
+/// Dynamic video simulcast stream adapter adjusting active spatial/temporal layers.
+pub struct VideoSimulcastController {
+    pub active_layer: SimulcastLayer,
+    pub target_fps: u32,
+    pub resolution: VideoResolution,
+    pub max_bitrate_kbps: u32,
+}
+
+impl Default for VideoSimulcastController {
+    fn default() -> Self {
+        Self {
+            active_layer: SimulcastLayer::High,
+            target_fps: 30,
+            resolution: VideoResolution::Res1080p,
+            max_bitrate_kbps: 2500,
+        }
+    }
+}
+
+impl VideoSimulcastController {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Selects optimal simulcast spatial/temporal layer based on estimated available bandwidth (kbps) and loss.
+    pub fn update_bandwidth(&mut self, available_kbps: u32, loss_fraction: f32) -> SimulcastLayer {
+        if available_kbps < 350 || loss_fraction > 0.12 {
+            // Severe congestion or cellular fallback: degrade to Low layer
+            self.active_layer = SimulcastLayer::Low;
+            self.resolution = VideoResolution::Res240p;
+            self.target_fps = 15;
+            self.max_bitrate_kbps = 250;
+        } else if available_kbps < 1200 || loss_fraction > 0.04 {
+            // Moderate bandwidth: Medium layer
+            self.active_layer = SimulcastLayer::Medium;
+            self.resolution = VideoResolution::Res480p;
+            self.target_fps = 24;
+            self.max_bitrate_kbps = 800;
+        } else {
+            // Abundant bandwidth: High layer
+            self.active_layer = SimulcastLayer::High;
+            self.resolution = VideoResolution::Res1080p;
+            self.target_fps = 30;
+            self.max_bitrate_kbps = 2500;
+        }
+
+        self.active_layer
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -611,5 +678,36 @@ mod tests {
         // Constant bit-rate codecs (G.711) do not change
         let mut g711 = BitrateController::new(AudioCodecProfile::G711uLaw);
         assert_eq!(g711.update_network_conditions(0.50, 600), 64000);
+    }
+
+    #[test]
+    fn test_video_simulcast_layer_adaptation() {
+        let mut simulcast = VideoSimulcastController::new();
+        assert_eq!(simulcast.active_layer, SimulcastLayer::High);
+        assert_eq!(simulcast.resolution, VideoResolution::Res1080p);
+        assert_eq!(simulcast.target_fps, 30);
+
+        // Low bandwidth (250kbps) triggers Low layer (240p @ 15fps)
+        let layer1 = simulcast.update_bandwidth(250, 0.01);
+        assert_eq!(layer1, SimulcastLayer::Low);
+        assert_eq!(simulcast.resolution, VideoResolution::Res240p);
+        assert_eq!(simulcast.target_fps, 15);
+        assert_eq!(simulcast.max_bitrate_kbps, 250);
+
+        // Moderate bandwidth (800kbps) triggers Medium layer (480p @ 24fps)
+        let layer2 = simulcast.update_bandwidth(800, 0.02);
+        assert_eq!(layer2, SimulcastLayer::Medium);
+        assert_eq!(simulcast.resolution, VideoResolution::Res480p);
+        assert_eq!(simulcast.target_fps, 24);
+
+        // High loss (>12%) forces Low layer even if bandwidth appears sufficient
+        let layer3 = simulcast.update_bandwidth(3000, 0.15);
+        assert_eq!(layer3, SimulcastLayer::Low);
+
+        // Clean link (2000kbps, 0% loss) restores High layer (1080p @ 30fps)
+        let layer4 = simulcast.update_bandwidth(2000, 0.0);
+        assert_eq!(layer4, SimulcastLayer::High);
+        assert_eq!(simulcast.resolution, VideoResolution::Res1080p);
+        assert_eq!(simulcast.target_fps, 30);
     }
 }

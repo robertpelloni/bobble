@@ -50,3 +50,4 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Implement dynamic bit-rate scaling and frame duration adaptation in `omnicore-engine/src/call.rs`.
 - [x] Implement bridge health diagnostics and anomaly detection in `omnicore-engine/src/telemetry.rs`.
 - [x] Implement starvation prevention and probe discovery in `omnicore-engine/src/router.rs`.
+- [x] Implement video simulcast and temporal resolution adaptation in `omnicore-engine/src/call.rs`.

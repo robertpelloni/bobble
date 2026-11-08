@@ -25,7 +25,8 @@ Ongoing internal architectural observations, codebase traits, and design prefere
 - Encrypted Storage: SQLCipher with AES-256-GCM encryption (`cipher_page_size=4096`, `kdf_iter=256000`, `foreign_keys=ON`). Schema includes `contacts`, `mappings`, `threads`, `messages`, `attachments`, `key_store`, and `sync_tokens`. Complete design documented in `omnicore-engine/SCHEMA.md`.
 - Dispatcher: Multi-path timeout fallback engine in `omnicore-engine/src/dispatcher.rs` executing concurrent queues and automated protocol fallback.
 - Desktop UI: React 19 + TypeScript + Vite + TailwindCSS running inside Tauri v2 shell with system tray controls.
-- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.7.1).
+- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.7.2).
+- Video Simulcast Controller: `omnicore-engine/src/call.rs` implements `VideoSimulcastController` adjusting video spatial resolutions (1080p, 480p, 240p) and frame rates (30fps, 24fps, 15fps) across High, Medium, and Low simulcast layers.
 - Starvation Prevention: `MultipathRouter::route_with_starvation_prevention` dynamically promotes unattempted (0 attempts) bridges to probe status during primary latency spikes.
 - Bridge Health Anomaly Detection: `omnicore-engine/src/telemetry.rs` implements `BridgeHealthMonitor` and `RoutingAnomaly` for diagnosing latency spikes, repeated failures, circuit locks, and starvation bottlenecks across routing bridges.
 - Dynamic Bitrate Controller: `omnicore-engine/src/call.rs` implements `BitrateController` for adjusting Opus audio stream bit-rates and frame duration (20ms/40ms) based on real-time packet loss and round-trip latency metrics.

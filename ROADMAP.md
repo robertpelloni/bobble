@@ -57,4 +57,5 @@ Major, long-term structural milestones and structural plans.
 - [x] Real-time bridge health diagnostics and anomaly detection for routing latency spikes and circuit locks (`telemetry.rs`).
 - [x] Advanced RTP jitter buffer with sequence reordering and packet loss concealment pipeline (`call.rs`).
 - [x] Native WebRTC audio track encoding and dynamic bit-rate adaptation (`call.rs`).
-- [ ] Video track simulcast and VP8/VP9 temporal layer switching.
+- [x] Video track simulcast and VP8/VP9 temporal layer switching (`VideoSimulcastController` in `call.rs`).
+- [ ] End-to-end encrypted screen sharing stream pipeline.
