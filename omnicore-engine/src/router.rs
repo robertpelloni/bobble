@@ -32,6 +32,60 @@ impl PayloadIntegrityGuard {
     }
 }
 
+/// An envelope binding a routed message payload with a cryptographic nonce and timestamp.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct RoutedPacketEnvelope {
+    pub nonce: String,
+    pub timestamp_sec: u64,
+    pub payload: MessagePayload,
+}
+
+/// Cache protecting against replay attacks across bridge cascades by tracking observed nonces.
+pub struct NonceReplayCache {
+    seen_nonces: HashMap<String, u64>,
+    ttl_seconds: u64,
+}
+
+impl Default for NonceReplayCache {
+    fn default() -> Self {
+        Self {
+            seen_nonces: HashMap::new(),
+            ttl_seconds: 3600, // 1 hour replay window
+        }
+    }
+}
+
+impl NonceReplayCache {
+    pub fn new(ttl_seconds: u64) -> Self {
+        Self {
+            seen_nonces: HashMap::new(),
+            ttl_seconds,
+        }
+    }
+
+    /// Checks if a nonce has been seen; if fresh, records it with an expiration timestamp.
+    pub fn check_and_record_nonce(&mut self, nonce: &str, now_sec: u64) -> bool {
+        if let Some(&expires_at) = self.seen_nonces.get(nonce) {
+            if expires_at > now_sec {
+                return false; // Replay detected
+            }
+        }
+        self.seen_nonces.insert(nonce.to_string(), now_sec + self.ttl_seconds);
+        true
+    }
+
+    /// Prunes expired nonces to maintain bounded memory footprint.
+    pub fn prune_expired(&mut self, now_sec: u64) -> usize {
+        let initial = self.seen_nonces.len();
+        self.seen_nonces.retain(|_, &mut exp| exp > now_sec);
+        initial - self.seen_nonces.len()
+    }
+
+    pub fn cached_nonce_count(&self) -> usize {
+        self.seen_nonces.len()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CircuitState {
     Closed,   // Normal operation, all traffic passes
@@ -397,6 +451,31 @@ impl MultipathRouter {
         }
 
         Ok(result)
+    }
+
+    /// Dispatches with end-to-end replay attack prevention and payload digest verification.
+    pub async fn route_with_replay_and_integrity_guard(
+        &self,
+        envelope: &RoutedPacketEnvelope,
+        replay_cache: &mut NonceReplayCache,
+        expected_digest: &str,
+        primary: ProtocolKind,
+        fallbacks: &[ProtocolKind],
+        now_epoch: u64,
+    ) -> Result<(ProtocolKind, DeliveryState)> {
+        // Step 1: Check replay cache
+        if !replay_cache.check_and_record_nonce(&envelope.nonce, now_epoch) {
+            return Err(anyhow!("Replay attack detected: duplicate nonce [{}]", envelope.nonce));
+        }
+
+        // Step 2: Route with integrity verification
+        self.route_with_integrity_check(
+            &envelope.payload,
+            expected_digest,
+            primary,
+            fallbacks,
+            now_epoch,
+        ).await
     }
 }
 
@@ -891,5 +970,62 @@ mod tests {
 
         assert!(fail_res.is_err());
         assert!(fail_res.unwrap_err().to_string().contains("integrity verification failed"));
+    }
+
+    #[tokio::test]
+    async fn test_route_with_replay_and_integrity_guard() {
+        let mut registry = BridgeRegistry::new();
+        let mut signal = SignalBridge::new();
+        signal.initialize().await.unwrap();
+        registry.register(ProtocolKind::Signal, Box::new(signal));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+        let mut replay_cache = NonceReplayCache::new(60);
+
+        let payload = MessagePayload {
+            recipient_id: "+15557777".to_string(),
+            content: "Anti-replay test message".to_string(),
+            fallback_protocol: "none".to_string(),
+        };
+
+        let digest = PayloadIntegrityGuard::compute_digest(&payload);
+
+        let envelope = RoutedPacketEnvelope {
+            nonce: "unique_nonce_001".to_string(),
+            timestamp_sec: 1700000000,
+            payload: payload.clone(),
+        };
+
+        // 1. First send: nonce is fresh, must succeed
+        let (chosen, state) = router
+            .route_with_replay_and_integrity_guard(
+                &envelope,
+                &mut replay_cache,
+                &digest,
+                ProtocolKind::Signal,
+                &[],
+                1700000000,
+            )
+            .await
+            .expect("First dispatch should succeed");
+
+        assert_eq!(chosen, ProtocolKind::Signal);
+        assert_eq!(state, DeliveryState::Delivered);
+        assert_eq!(replay_cache.cached_nonce_count(), 1);
+
+        // 2. Replay with identical nonce: must be rejected
+        let replay_res = router
+            .route_with_replay_and_integrity_guard(
+                &envelope,
+                &mut replay_cache,
+                &digest,
+                ProtocolKind::Signal,
+                &[],
+                1700000010,
+            )
+            .await;
+
+        assert!(replay_res.is_err());
+        assert!(replay_res.unwrap_err().to_string().contains("Replay attack detected"));
     }
 }

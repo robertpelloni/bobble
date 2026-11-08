@@ -15,7 +15,7 @@ pub enum Protocol {
     Sms,
 }
 
-#[derive(Clone, PartialEq, Message)]
+#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Message)]
 pub struct MessagePayload {
     #[prost(string, tag = "1")]
     pub recipient_id: String,

@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.7.8:
+  - Cryptographic Replay Protection & Recipient Binding: Implemented `RoutedPacketEnvelope`, `NonceReplayCache`, and `route_with_replay_and_integrity_guard` in `omnicore-engine/src/router.rs`. Guards against replay attacks and ensures message payload integrity across cascading multi-protocol routes.
 - 0.7.7:
   - Hardware Video Encoder & H.264 NALU Packetization: Implemented `HardwareEncoderType` (Vaapi, VideoToolbox, Nvenc, SoftwareOpenH264), `EncoderConfig`, `EncodedNalu`, and `HardwareVideoEncoder` in `omnicore-engine/src/call.rs`. Provides zero-copy frame compression into H.264 NALUs with automatic software fallback when hardware accelerators are unavailable.
 - 0.7.6:

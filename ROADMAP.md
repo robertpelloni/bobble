@@ -54,6 +54,7 @@ Major, long-term structural milestones and structural plans.
 - [x] Multi-bridge optimal cascade execution with automated circuit-breaker bypass and metric updates (`router.rs`).
 - [x] Starvation prevention and dynamic probe discovery across candidate bridges (`router.rs`).
 - [x] Cryptographic payload digest integrity verification during cascading fallbacks (`router.rs`).
+- [x] Cryptographic replay attack protection and nonce caching across cascading routes (`router.rs`).
 - [x] Protocol bridge reliability hardening across iMessage and SMS Hayes AT modem drivers (`bridges/`).
 - [x] Real-time bridge health diagnostics and anomaly detection for routing latency spikes and circuit locks (`telemetry.rs`).
 - [x] Advanced RTP jitter buffer with sequence reordering and packet loss concealment pipeline (`call.rs`).
