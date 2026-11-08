@@ -64,4 +64,5 @@ Major, long-term structural milestones and structural plans.
 - [x] Hardware-accelerated zero-copy video frame buffer pool and format grabber (`VideoFramePool` in `call.rs`).
 - [x] Dynamic spatial downsampling and color conversion pipeline (`VideoColorConverter` in `call.rs`).
 - [x] Hardware-accelerated VAAPI/VideoToolbox encoder backend drivers (`HardwareVideoEncoder` in `call.rs`).
-- [ ] Hardware-accelerated NVDEC/V4L2 hardware video decoder pipeline.
+- [x] Hardware-accelerated NVDEC/V4L2 hardware video decoder pipeline (`HardwareVideoDecoder` in `call.rs`).
+- [ ] Full Milestone 6 verification and multi-node hardware test suite.

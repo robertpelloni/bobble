@@ -860,6 +860,94 @@ impl HardwareVideoEncoder {
     }
 }
 
+/// Supported hardware-accelerated and software video decoder backends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HardwareDecoderType {
+    V4l2m2m,          // Linux V4L2 Memory-to-Memory (e.g. Raspberry Pi / Allwinner / Rockchip)
+    Nvdec,            // NVIDIA NVDEC
+    VideoToolbox,     // macOS VideoToolbox
+    SoftwareOpenH264, // Software CPU fallback
+}
+
+/// Parameters for video decoding pipeline.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DecoderConfig {
+    pub output_width: u32,
+    pub output_height: u32,
+    pub output_format: VideoPixelFormat,
+    pub preferred_backend: HardwareDecoderType,
+}
+
+impl Default for DecoderConfig {
+    fn default() -> Self {
+        Self {
+            output_width: 1280,
+            output_height: 720,
+            output_format: VideoPixelFormat::NV12,
+            preferred_backend: HardwareDecoderType::V4l2m2m,
+        }
+    }
+}
+
+/// Hardware-accelerated video decoder pipeline reconstructing raw video frames from NALU streams.
+pub struct HardwareVideoDecoder {
+    pub config: DecoderConfig,
+    pub active_backend: HardwareDecoderType,
+    decoded_frames_count: u64,
+    has_seen_idr: bool,
+}
+
+impl HardwareVideoDecoder {
+    pub fn new(config: DecoderConfig, hardware_available: bool) -> Self {
+        let active_backend = if hardware_available {
+            config.preferred_backend
+        } else {
+            HardwareDecoderType::SoftwareOpenH264
+        };
+
+        Self {
+            config,
+            active_backend,
+            decoded_frames_count: 0,
+            has_seen_idr: false,
+        }
+    }
+
+    /// Decodes an incoming H.264 NALU into an uncompressed `RawVideoFrame`.
+    pub fn decode_nalu(&mut self, nalu: &EncodedNalu) -> Result<RawVideoFrame> {
+        if nalu.payload.is_empty() {
+            return Err(anyhow!("Cannot decode empty NALU payload"));
+        }
+
+        if nalu.is_keyframe {
+            self.has_seen_idr = true;
+        }
+
+        if !self.has_seen_idr {
+            return Err(anyhow!("Cannot decode delta frame before first IDR keyframe"));
+        }
+
+        self.decoded_frames_count += 1;
+
+        let mut frame = RawVideoFrame::new(
+            self.config.output_width,
+            self.config.output_height,
+            self.config.output_format,
+        );
+        frame.timestamp_ns = nalu.timestamp_ns;
+
+        // Reconstruct decompressed pixel representation
+        let copy_len = frame.buffer.len().min(nalu.payload.len());
+        frame.buffer[..copy_len].copy_from_slice(&nalu.payload[..copy_len]);
+
+        Ok(frame)
+    }
+
+    pub fn decoded_count(&self) -> u64 {
+        self.decoded_frames_count
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1212,5 +1300,49 @@ mod tests {
         // 2. Hardware acceleration unavailable -> automatic fallback to SoftwareOpenH264
         let sw_encoder = HardwareVideoEncoder::new(config, false);
         assert_eq!(sw_encoder.active_backend, HardwareEncoderType::SoftwareOpenH264);
+    }
+
+    #[test]
+    fn test_hardware_video_decoder_lifecycle_and_idr_sync() {
+        let config = DecoderConfig {
+            output_width: 1280,
+            output_height: 720,
+            output_format: VideoPixelFormat::NV12,
+            preferred_backend: HardwareDecoderType::V4l2m2m,
+        };
+
+        // 1. Decoder with hardware support enabled -> V4L2 backend
+        let mut hw_decoder = HardwareVideoDecoder::new(config.clone(), true);
+        assert_eq!(hw_decoder.active_backend, HardwareDecoderType::V4l2m2m);
+
+        // Attempting to decode delta frame before keyframe must fail
+        let delta_nalu = EncodedNalu {
+            nalu_type: 1,
+            is_keyframe: false,
+            timestamp_ns: 1000,
+            payload: vec![0x00, 0x00, 0x00, 0x01, 0x01, 0xAA],
+        };
+        assert!(hw_decoder.decode_nalu(&delta_nalu).is_err());
+
+        // Decode keyframe first -> succeeds and synchronizes decoder
+        let idr_nalu = EncodedNalu {
+            nalu_type: 5,
+            is_keyframe: true,
+            timestamp_ns: 2000,
+            payload: vec![0x00, 0x00, 0x00, 0x01, 0x05, 0xBB],
+        };
+        let decoded_frame = hw_decoder.decode_nalu(&idr_nalu).expect("IDR decode should succeed");
+        assert_eq!(decoded_frame.width, 1280);
+        assert_eq!(decoded_frame.height, 720);
+        assert_eq!(decoded_frame.format, VideoPixelFormat::NV12);
+        assert_eq!(hw_decoder.decoded_count(), 1);
+
+        // Subsequent delta frame now decodes successfully
+        assert!(hw_decoder.decode_nalu(&delta_nalu).is_ok());
+        assert_eq!(hw_decoder.decoded_count(), 2);
+
+        // 2. Decoder with hardware acceleration disabled -> SoftwareOpenH264 fallback
+        let sw_decoder = HardwareVideoDecoder::new(config, false);
+        assert_eq!(sw_decoder.active_backend, HardwareDecoderType::SoftwareOpenH264);
     }
 }

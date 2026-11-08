@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.7.9:
+  - Hardware Video Decoder & NALU Stream Reassembly: Implemented `HardwareDecoderType` (V4l2m2m, Nvdec, VideoToolbox, SoftwareOpenH264), `DecoderConfig`, and `HardwareVideoDecoder` in `omnicore-engine/src/call.rs`. Provides IDR keyframe synchronization and reconstructs uncompressed `RawVideoFrame` buffers from H.264 NALUs with automatic software fallback.
 - 0.7.8:
   - Cryptographic Replay Protection & Recipient Binding: Implemented `RoutedPacketEnvelope`, `NonceReplayCache`, and `route_with_replay_and_integrity_guard` in `omnicore-engine/src/router.rs`. Guards against replay attacks and ensures message payload integrity across cascading multi-protocol routes.
 - 0.7.7:

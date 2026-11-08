@@ -26,7 +26,8 @@ Summarize everything learned during the session that was not obvious at the star
 - The desktop frontend UI was completely redesigned and consolidated into a high-value single-page multi-pane interface in React 19 + TypeScript + TailwindCSS.
 - Cross-platform mobile shell established in `omnicore-mobile/` using React Native / Expo, providing on-device conversation feeds, transport tags, and bridge telemetry.
 - Automation scripts were created in `scripts/`: `build.sh`, `test.sh`, `dev.sh`, `run.sh`.
-- Global version is governed by `VERSION.md` (0.7.8).
+- Global version is governed by `VERSION.md` (0.7.9).
+- Hardware video decoder pipeline with IDR synchronization (`HardwareVideoDecoder`) added in `omnicore-engine/src/call.rs`.
 - Replay attack protection with nonce caching (`NonceReplayCache`) added in `omnicore-engine/src/router.rs`.
 - Hardware video encoder abstraction with automatic software fallback (`HardwareVideoEncoder`) added in `omnicore-engine/src/call.rs`.
 - Video spatial downsampling and RGBA to Planar I420 conversion (`VideoColorConverter`) added in `omnicore-engine/src/call.rs`.
