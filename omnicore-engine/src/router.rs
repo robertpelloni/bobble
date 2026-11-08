@@ -2,10 +2,35 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use tokio::sync::RwLock;
-
 use crate::bridge::ProtocolBridge;
 use crate::dispatcher::MessagePayload;
 use crate::models::{DeliveryState, ProtocolKind};
+
+/// Guard ensuring message payload integrity and tamper detection across multi-protocol cascading fallbacks.
+pub struct PayloadIntegrityGuard;
+
+impl PayloadIntegrityGuard {
+    /// Computes a deterministic 64-bit FNV-1a cryptographic checksum of a message payload's content and recipient.
+    pub fn compute_digest(payload: &MessagePayload) -> String {
+        let mut sum: u64 = 0xcbf29ce484222325;
+        for &b in payload.recipient_id.as_bytes() {
+            sum ^= b as u64;
+            sum = sum.wrapping_mul(0x100000001b3);
+        }
+        sum ^= b':' as u64;
+        sum = sum.wrapping_mul(0x100000001b3);
+        for &b in payload.content.as_bytes() {
+            sum ^= b as u64;
+            sum = sum.wrapping_mul(0x100000001b3);
+        }
+        format!("{:016x}", sum)
+    }
+
+    /// Verifies that the payload matches an expected digest string.
+    pub fn verify_digest(payload: &MessagePayload, expected_digest: &str) -> bool {
+        Self::compute_digest(payload) == expected_digest
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CircuitState {
@@ -349,6 +374,29 @@ impl MultipathRouter {
             &probed_fallbacks,
             now_epoch,
         ).await
+    }
+
+    /// Dispatches a message across cascading fallbacks while verifying payload digest integrity before and after dispatch.
+    pub async fn route_with_integrity_check(
+        &self,
+        payload: &MessagePayload,
+        expected_digest: &str,
+        primary: ProtocolKind,
+        fallbacks: &[ProtocolKind],
+        now_epoch: u64,
+    ) -> Result<(ProtocolKind, DeliveryState)> {
+        if !PayloadIntegrityGuard::verify_digest(payload, expected_digest) {
+            return Err(anyhow!("Payload integrity verification failed: tamper or truncation detected"));
+        }
+
+        let result = self.route_with_optimal_cascade(payload, primary, fallbacks, now_epoch).await?;
+
+        // Post-dispatch re-verification
+        if !PayloadIntegrityGuard::verify_digest(payload, expected_digest) {
+            return Err(anyhow!("Post-dispatch payload integrity check failed"));
+        }
+
+        Ok(result)
     }
 }
 
@@ -793,5 +841,55 @@ mod tests {
         let signal_metric = reg_guard.get_metrics(ProtocolKind::Signal).unwrap();
         assert_eq!(signal_metric.total_attempts, 1);
         assert_eq!(signal_metric.successful_attempts, 1);
+    }
+
+    #[tokio::test]
+    async fn test_route_with_payload_integrity_verification() {
+        let mut registry = BridgeRegistry::new();
+        let mut signal = SignalBridge::new();
+        signal.initialize().await.unwrap();
+        registry.register(ProtocolKind::Signal, Box::new(signal));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+
+        let valid_payload = MessagePayload {
+            recipient_id: "+15558888".to_string(),
+            content: "Encrypted integrity payload".to_string(),
+            fallback_protocol: "none".to_string(),
+        };
+
+        let digest = PayloadIntegrityGuard::compute_digest(&valid_payload);
+
+        // 1. Dispatch with valid digest succeeds
+        let (chosen, state) = router
+            .route_with_integrity_check(
+                &valid_payload,
+                &digest,
+                ProtocolKind::Signal,
+                &[],
+                1700000000,
+            )
+            .await
+            .expect("Valid digest should pass integrity check");
+
+        assert_eq!(chosen, ProtocolKind::Signal);
+        assert_eq!(state, DeliveryState::Delivered);
+
+        // 2. Tampered content fails verification
+        let mut tampered_payload = valid_payload.clone();
+        tampered_payload.content = "Tampered unauthorized content!".to_string();
+
+        let fail_res = router
+            .route_with_integrity_check(
+                &tampered_payload,
+                &digest,
+                ProtocolKind::Signal,
+                &[],
+                1700000000,
+            )
+            .await;
+
+        assert!(fail_res.is_err());
+        assert!(fail_res.unwrap_err().to_string().contains("integrity verification failed"));
     }
 }

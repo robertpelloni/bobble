@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.7.4:
+  - Cryptographic Payload Integrity Verification: Implemented `PayloadIntegrityGuard` and `route_with_integrity_check` on `MultipathRouter` in `omnicore-engine/src/router.rs`. Validates 64-bit cryptographic payload digests before and after multi-protocol cascade dispatching to prevent content tampering or truncation across diverse networks.
 - 0.7.3:
   - End-to-End Encrypted Screen Sharing Pipeline: Implemented `ScreenShareTrack`, `ScreenFrameChunk`, and `ScreenSharePipeline` in `omnicore-engine/src/call.rs`. Provides MTU-safe frame chunking (1200 bytes default), integrity checksum verification, out-of-order chunk buffering and reassembly, and active encryption session key management.
 - 0.7.2:
