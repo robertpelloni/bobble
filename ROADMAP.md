@@ -37,7 +37,13 @@ Major, long-term structural milestones and structural plans.
 - Multi-target bundling (Desktop + Android + iOS) with automated packaging pipeline (`scripts/bundle.sh`).
 - Mobile daemon settings, Tor SOCKS5 proxy, and cryptographic identity pairing.
 
-## Milestone 5: Production Hardening, Key Ratchets & Native Performance (In Progress)
-- Double Ratchet session persistence and X3DH pre-key bundles (`ratchet.rs`).
-- WebSocket IPC daemon server (`server.rs`).
-- Cross-platform federation and multi-tier cascade routing (`router.rs`, `federation.rs`).
+## Milestone 5: Production Hardening, Key Ratchets & Native Performance (Completed)
+- Double Ratchet session persistence and X3DH pre-key bundles in SQLCipher key_store (`ratchet.rs`).
+- WebSocket IPC daemon server with session-targeted event broadcasting (`server.rs`).
+- Cross-platform federation and multi-tier cascade routing with circuit breakers (`router.rs`, `federation.rs`).
+- Matrix and Discord bridge delivery reliability and retry loops (`bridges/`).
+
+## Milestone 6: Autonomous Hardware Appliance & Mesh Expansion (Planned)
+- Standalone compute module daemon image with cellular LTE hat failover.
+- Bluetooth Low Energy (BLE) / WiFi-Direct off-grid mesh routing.
+- End-to-end audio/video call aggregation across WebRTC and Discord gateways.

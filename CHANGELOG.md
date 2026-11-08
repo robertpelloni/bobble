@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.6.0:
+  - Milestone 5 Completion & Production Release: Completed production hardening across key ratchets, WebSocket IPC event broadcasting, circuit-breaker routing, and multi-tier cascades. Updated roadmap to establish Milestone 6.
 - 0.5.9:
   - WebSocket Server Event Broadcasting: Implemented `broadcast_event` on `WebSocketServer` in `omnicore-engine/src/server.rs` supporting channel-targeted and global real-time event distribution to connected desktop and mobile clients.
 - 0.5.8:
