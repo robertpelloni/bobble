@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.6.9:
+  - Audio Bitrate Adaptation & Codec Profiles: Implemented `AudioCodecProfile` and `BitrateController` in `omnicore-engine/src/call.rs`. Dynamically scales Opus audio bit-rates down during packet loss (>10%) and scales up under clean network conditions, with adaptive frame packet duration (20ms/40ms) to conserve bandwidth.
 - 0.6.8:
   - iMessage Relay & SMS Modem Hardening: Enhanced `IMessageBridge` and `SmsBridge` in `omnicore-engine/src/bridges/` with empty recipient/content input validation, connection status queries (`is_connected`, `is_ready`), and configurable retry loops. Added comprehensive iMessage-to-SMS multi-path fallback cascade integration test.
 - 0.6.7:

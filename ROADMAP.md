@@ -54,4 +54,5 @@ Major, long-term structural milestones and structural plans.
 - [x] Multi-bridge optimal cascade execution with automated circuit-breaker bypass and metric updates (`router.rs`).
 - [x] Protocol bridge reliability hardening across iMessage and SMS Hayes AT modem drivers (`bridges/`).
 - [x] Advanced RTP jitter buffer with sequence reordering and packet loss concealment pipeline (`call.rs`).
-- [ ] Native WebRTC audio track encoding and dynamic bit-rate adaptation.
+- [x] Native WebRTC audio track encoding and dynamic bit-rate adaptation (`call.rs`).
+- [ ] Video track simulcast and VP8/VP9 temporal layer switching.

@@ -326,6 +326,80 @@ impl RtpJitterBuffer {
     }
 }
 
+/// Supported audio codec profiles for voice call media streaming and transcoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AudioCodecProfile {
+    OpusWideband, // 48kHz stereo/mono, 6kbps - 510kbps
+    G711uLaw,     // 8kHz standard telephony (North America)
+    G711aLaw,     // 8kHz standard telephony (Europe / International)
+    PcmLinear16,  // Uncompressed raw audio samples
+}
+
+/// Controls dynamic bit-rate and frame duration adaptations based on real-time network conditions.
+pub struct BitrateController {
+    pub codec: AudioCodecProfile,
+    pub current_bitrate_bps: u32,
+    pub min_bitrate_bps: u32,
+    pub max_bitrate_bps: u32,
+    pub frame_duration_ms: u32,
+}
+
+impl Default for BitrateController {
+    fn default() -> Self {
+        Self {
+            codec: AudioCodecProfile::OpusWideband,
+            current_bitrate_bps: 48000,
+            min_bitrate_bps: 12000,
+            max_bitrate_bps: 128000,
+            frame_duration_ms: 20,
+        }
+    }
+}
+
+impl BitrateController {
+    pub fn new(codec: AudioCodecProfile) -> Self {
+        let (min, max, default_br) = match codec {
+            AudioCodecProfile::OpusWideband => (12000, 128000, 48000),
+            AudioCodecProfile::G711uLaw | AudioCodecProfile::G711aLaw => (64000, 64000, 64000),
+            AudioCodecProfile::PcmLinear16 => (128000, 256000, 128000),
+        };
+
+        Self {
+            codec,
+            current_bitrate_bps: default_br,
+            min_bitrate_bps: min,
+            max_bitrate_bps: max,
+            frame_duration_ms: 20,
+        }
+    }
+
+    /// Dynamically adjusts bit-rate and frame duration given packet loss fraction (0.0 to 1.0) and round-trip latency.
+    pub fn update_network_conditions(&mut self, loss_fraction: f32, rtt_ms: u64) -> u32 {
+        if self.min_bitrate_bps == self.max_bitrate_bps {
+            return self.current_bitrate_bps;
+        }
+
+        if loss_fraction > 0.10 || rtt_ms > 300 {
+            // High loss or high latency: step down bit-rate aggressively (-25%) and bundle larger frame sizes
+            let reduced = (self.current_bitrate_bps as f32 * 0.75) as u32;
+            self.current_bitrate_bps = reduced.max(self.min_bitrate_bps);
+            self.frame_duration_ms = 40; // Increase packet duration to reduce IP packet header overhead
+        } else if loss_fraction > 0.03 || rtt_ms > 150 {
+            // Moderate loss: moderate reduction (-10%)
+            let reduced = (self.current_bitrate_bps as f32 * 0.90) as u32;
+            self.current_bitrate_bps = reduced.max(self.min_bitrate_bps);
+            self.frame_duration_ms = 20;
+        } else {
+            // Clean network (loss <= 3% and low latency): incrementally step up (+10%) towards max quality
+            let increased = (self.current_bitrate_bps as f32 * 1.10) as u32;
+            self.current_bitrate_bps = increased.min(self.max_bitrate_bps);
+            self.frame_duration_ms = 20;
+        }
+
+        self.current_bitrate_bps
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -516,5 +590,26 @@ mod tests {
         assert_eq!(plc.sequence, 11);
         assert_eq!(plc.ssrc, 42);
         assert_eq!(plc.payload.len(), 160);
+    }
+
+    #[test]
+    fn test_bitrate_controller_adaptation_rules() {
+        let mut controller = BitrateController::new(AudioCodecProfile::OpusWideband);
+        assert_eq!(controller.current_bitrate_bps, 48000);
+        assert_eq!(controller.frame_duration_ms, 20);
+
+        // Under high packet loss (15%), bit-rate decreases by 25% and frame duration increases to 40ms
+        let br1 = controller.update_network_conditions(0.15, 50);
+        assert_eq!(br1, 36000);
+        assert_eq!(controller.frame_duration_ms, 40);
+
+        // Under clean conditions (loss 0%, RTT 30ms), bit-rate ramps up by 10%
+        let br2 = controller.update_network_conditions(0.0, 30);
+        assert_eq!(br2, 39600);
+        assert_eq!(controller.frame_duration_ms, 20);
+
+        // Constant bit-rate codecs (G.711) do not change
+        let mut g711 = BitrateController::new(AudioCodecProfile::G711uLaw);
+        assert_eq!(g711.update_network_conditions(0.50, 600), 64000);
     }
 }
