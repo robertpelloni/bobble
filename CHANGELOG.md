@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.6.1:
+  - Milestone 6 Compute Module Appliance Daemon & Failover: Implemented `ApplianceConfig` and `ApplianceAction` in `omnicore-engine/src/telemetry.rs` supporting standalone 24/7 routing appliances with cellular LTE failovers and safe shutdown thresholds.
 - 0.6.0:
   - Milestone 5 Completion & Production Release: Completed production hardening across key ratchets, WebSocket IPC event broadcasting, circuit-breaker routing, and multi-tier cascades. Updated roadmap to establish Milestone 6.
 - 0.5.9:
