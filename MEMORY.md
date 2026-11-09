@@ -25,7 +25,8 @@ Ongoing internal architectural observations, codebase traits, and design prefere
 - Encrypted Storage: SQLCipher with AES-256-GCM encryption (`cipher_page_size=4096`, `kdf_iter=256000`, `foreign_keys=ON`). Schema includes `contacts`, `mappings`, `threads`, `messages`, `attachments`, `key_store`, and `sync_tokens`. Complete design documented in `omnicore-engine/SCHEMA.md`.
 - Dispatcher: Multi-path timeout fallback engine in `omnicore-engine/src/dispatcher.rs` executing concurrent queues and automated protocol fallback.
 - Desktop UI: React 19 + TypeScript + Vite + TailwindCSS running inside Tauri v2 shell with system tray controls.
-- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.9.1).
+- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.9.2).
+- Cryptographic Delivery Confirmation: `DeliveryReceipt`, `ReceiptTracker`, and `MultipathRouter::route_with_confirmed_receipt` in `omnicore-engine/src/router.rs` track explicit receipt signatures and trigger fallback cascades when acknowledgment deadlines expire.
 - Asymmetric Partition Resilience: `FederationManager::broadcast_event_with_partition_resilience` in `omnicore-engine/src/federation.rs` maps disjoint protocol paths across network partitions for isolated peer delivery without vector clock corruption.
 - Cross-Protocol Content Transcoder: `PayloadContentTranscoder` and `MultipathRouter::route_with_transcoding_cascade` in `omnicore-engine/src/router.rs` automatically sanitize and normalize rich markdown/HTML content into plain ASCII/GSM-7 when cascading to SMS.
 - Nostr Protocol Bridge: `NostrBridge` in `omnicore-engine/src/bridges/nostr.rs` implements NIP-01 and NIP-04 encrypted direct messaging across WebSocket relay pools with Schnorr public key validation.

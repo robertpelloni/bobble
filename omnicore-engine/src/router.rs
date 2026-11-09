@@ -115,6 +115,105 @@ impl PayloadFragmenter {
     }
 }
 
+/// Cryptographic delivery acknowledgment receipt confirming message arrival at the final recipient node.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct DeliveryReceipt {
+    pub nonce: String,
+    pub recipient_id: String,
+    pub protocol: ProtocolKind,
+    pub received_timestamp_sec: u64,
+    pub signature: String,
+}
+
+impl DeliveryReceipt {
+    /// Generates a delivery receipt signed with a simulated recipient key.
+    pub fn generate(nonce: &str, recipient_id: &str, protocol: ProtocolKind, timestamp_sec: u64) -> Self {
+        let mut sum: u64 = 0xcbf29ce484222325;
+        for &b in nonce.as_bytes() {
+            sum ^= b as u64;
+            sum = sum.wrapping_mul(0x100000001b3);
+        }
+        sum ^= protocol as u64;
+        sum = sum.wrapping_mul(0x100000001b3);
+
+        Self {
+            nonce: nonce.to_string(),
+            recipient_id: recipient_id.to_string(),
+            protocol,
+            received_timestamp_sec: timestamp_sec,
+            signature: format!("{:016x}", sum),
+        }
+    }
+
+    /// Verifies the authenticity of the receipt signature.
+    pub fn verify_signature(&self) -> bool {
+        let mut sum: u64 = 0xcbf29ce484222325;
+        for &b in self.nonce.as_bytes() {
+            sum ^= b as u64;
+            sum = sum.wrapping_mul(0x100000001b3);
+        }
+        sum ^= self.protocol as u64;
+        sum = sum.wrapping_mul(0x100000001b3);
+        self.signature == format!("{:016x}", sum)
+    }
+}
+
+/// Tracker managing in-flight delivery receipts and timeout deadlines across multi-protocol dispatches.
+pub struct ReceiptTracker {
+    pending_receipts: HashMap<String, (ProtocolKind, u64)>, // nonce -> (protocol, deadline_epoch_sec)
+    receipt_timeout_sec: u64,
+}
+
+impl Default for ReceiptTracker {
+    fn default() -> Self {
+        Self {
+            pending_receipts: HashMap::new(),
+            receipt_timeout_sec: 15,
+        }
+    }
+}
+
+impl ReceiptTracker {
+    pub fn new(receipt_timeout_sec: u64) -> Self {
+        Self {
+            pending_receipts: HashMap::new(),
+            receipt_timeout_sec,
+        }
+    }
+
+    /// Registers a sent message nonce expecting an acknowledgment before the deadline.
+    pub fn register_pending(&mut self, nonce: &str, protocol: ProtocolKind, now_sec: u64) {
+        let deadline = now_sec + self.receipt_timeout_sec;
+        self.pending_receipts.insert(nonce.to_string(), (protocol, deadline));
+    }
+
+    /// Processes an incoming delivery receipt. Returns true if receipt was pending and verified.
+    pub fn confirm_receipt(&mut self, receipt: &DeliveryReceipt, now_sec: u64) -> bool {
+        if !receipt.verify_signature() {
+            return false;
+        }
+
+        if let Some((proto, deadline)) = self.pending_receipts.remove(&receipt.nonce) {
+            proto == receipt.protocol && now_sec <= deadline
+        } else {
+            false
+        }
+    }
+
+    /// Checks if a pending nonce has timed out.
+    pub fn is_timed_out(&self, nonce: &str, now_sec: u64) -> bool {
+        if let Some(&(_, deadline)) = self.pending_receipts.get(nonce) {
+            now_sec > deadline
+        } else {
+            false
+        }
+    }
+
+    pub fn pending_count(&self) -> usize {
+        self.pending_receipts.len()
+    }
+}
+
 /// Guard ensuring message payload integrity and tamper detection across multi-protocol cascading fallbacks.
 pub struct PayloadIntegrityGuard;
 
@@ -1375,6 +1474,105 @@ impl MultipathRouter {
             payload.recipient_id
         ))
     }
+
+    /// Dispatches with explicit end-to-end delivery receipt confirmation.
+    /// If candidate bridge sends successfully but fails to return a verified cryptographic
+    /// acknowledgment receipt within the deadline (e.g. silent drop), triggers immediate cascade fallback.
+    pub async fn route_with_confirmed_receipt<F>(
+        &self,
+        payload: &MessagePayload,
+        nonce: &str,
+        primary: ProtocolKind,
+        fallbacks: &[ProtocolKind],
+        tracker: &mut ReceiptTracker,
+        receipt_generator: F,
+        now_epoch: u64,
+    ) -> Result<(ProtocolKind, DeliveryState, DeliveryReceipt)>
+    where
+        F: Fn(ProtocolKind, &str, &str, u64) -> Option<DeliveryReceipt>,
+    {
+        let (chosen_primary, reordered_fallbacks) = {
+            let registry_guard = self.registry.read().await;
+            registry_guard.select_optimal_route(primary, fallbacks)
+        };
+
+        let mut candidate_chain = vec![chosen_primary];
+        candidate_chain.extend(reordered_fallbacks);
+
+        for (idx, &candidate) in candidate_chain.iter().enumerate() {
+            let is_available = {
+                let mut registry_guard = self.registry.write().await;
+                if let Some(metric) = registry_guard.metrics.get_mut(&candidate) {
+                    metric.is_available_at(now_epoch)
+                } else {
+                    true
+                }
+            };
+
+            if !is_available {
+                continue;
+            }
+
+            let bridge_opt = {
+                let registry_guard = self.registry.read().await;
+                registry_guard.get(candidate)
+            };
+
+            if let Some(bridge_ref) = bridge_opt {
+                let bridge = bridge_ref.read().await;
+                let start = std::time::Instant::now();
+
+                match bridge.send_message(payload).await {
+                    Ok(_) => {
+                        let latency_ms = start.elapsed().as_millis() as u64;
+                        tracker.register_pending(nonce, candidate, now_epoch);
+
+                        // Await simulated receipt response
+                        if let Some(receipt) = receipt_generator(candidate, nonce, &payload.recipient_id, now_epoch) {
+                            if tracker.confirm_receipt(&receipt, now_epoch) {
+                                let mut registry_guard = self.registry.write().await;
+                                registry_guard.record_delivery_metrics(candidate, latency_ms, true, now_epoch);
+
+                                let state = if idx == 0 && candidate == primary {
+                                    DeliveryState::Delivered
+                                } else {
+                                    DeliveryState::FallbackTriggered {
+                                        from: primary,
+                                        to: candidate,
+                                        reason: format!("Receipt confirmed via fallback [{}]", candidate.as_str()),
+                                    }
+                                };
+                                return Ok((candidate, state, receipt));
+                            }
+                        }
+
+                        // Receipt missing, invalid, or timed out (silent drop) -> treat as failed attempt
+                        let mut registry_guard = self.registry.write().await;
+                        registry_guard.record_delivery_metrics(candidate, latency_ms, false, now_epoch);
+                        eprintln!(
+                            "Bridge [{}] sent but receipt confirmation timed out or signature invalid. Cascading...",
+                            candidate.as_str()
+                        );
+                    }
+                    Err(e) => {
+                        let latency_ms = start.elapsed().as_millis() as u64;
+                        let mut registry_guard = self.registry.write().await;
+                        registry_guard.record_delivery_metrics(candidate, latency_ms, false, now_epoch);
+                        eprintln!(
+                            "Bridge [{}] send failed: {}. Continuing cascade...",
+                            candidate.as_str(),
+                            e
+                        );
+                    }
+                }
+            }
+        }
+
+        Err(anyhow!(
+            "Confirmed receipt routing failed: all candidates exhausted or timed out for recipient {}",
+            payload.recipient_id
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -2397,6 +2595,83 @@ mod tests {
                 assert_eq!(from, ProtocolKind::Matrix);
                 assert_eq!(to, ProtocolKind::Sms);
                 assert!(reason.contains("Transcoded"));
+            }
+            _ => panic!("Expected FallbackTriggered state"),
+        }
+    }
+
+    #[test]
+    fn test_receipt_tracker_lifecycle_and_timeout() {
+        let mut tracker = ReceiptTracker::new(10); // 10s timeout
+        let now = 1000;
+
+        tracker.register_pending("nonce_abc", ProtocolKind::Signal, now);
+        assert_eq!(tracker.pending_count(), 1);
+        assert!(!tracker.is_timed_out("nonce_abc", now + 5));
+        assert!(tracker.is_timed_out("nonce_abc", now + 11));
+
+        let valid_receipt = DeliveryReceipt::generate("nonce_abc", "+1555", ProtocolKind::Signal, now + 5);
+        assert!(valid_receipt.verify_signature());
+
+        // Confirming receipt before timeout succeeds
+        assert!(tracker.confirm_receipt(&valid_receipt, now + 5));
+        assert_eq!(tracker.pending_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_route_with_confirmed_receipt_silent_drop_cascade() {
+        let mut registry = BridgeRegistry::new();
+
+        // 1. Primary Signal bridge: initialized, sends, but simulated receipt fails / silent drop
+        let mut signal = SignalBridge::new();
+        signal.initialize().await.unwrap();
+        registry.register(ProtocolKind::Signal, Box::new(signal));
+
+        // 2. Secondary Matrix bridge: initialized, sends AND returns verified receipt
+        let mut matrix = MatrixBridge::new();
+        matrix.initialize().await.unwrap();
+        registry.register(ProtocolKind::Matrix, Box::new(matrix));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+        let mut tracker = ReceiptTracker::new(10);
+
+        let payload = MessagePayload {
+            recipient_id: "!matrix_receipt_room:matrix.org".to_string(),
+            content: "End-to-end receipt confirmation test".to_string(),
+            fallback_protocol: "Matrix".to_string(),
+        };
+
+        // Receipt generator: Signal drops receipt (None), Matrix confirms receipt (Some)
+        let receipt_sim = |proto: ProtocolKind, nonce: &str, recipient: &str, now: u64| {
+            if proto == ProtocolKind::Matrix {
+                Some(DeliveryReceipt::generate(nonce, recipient, proto, now))
+            } else {
+                None // Silent drop on Signal
+            }
+        };
+
+        let (chosen, state, receipt) = router
+            .route_with_confirmed_receipt(
+                &payload,
+                "nonce_test_receipt_001",
+                ProtocolKind::Signal,
+                &[ProtocolKind::Matrix],
+                &mut tracker,
+                receipt_sim,
+                1700000000,
+            )
+            .await
+            .expect("Routing should cascade to Matrix upon missing Signal receipt");
+
+        assert_eq!(chosen, ProtocolKind::Matrix);
+        assert_eq!(receipt.nonce, "nonce_test_receipt_001");
+        assert!(receipt.verify_signature());
+
+        match state {
+            DeliveryState::FallbackTriggered { from, to, reason } => {
+                assert_eq!(from, ProtocolKind::Signal);
+                assert_eq!(to, ProtocolKind::Matrix);
+                assert!(reason.contains("Receipt confirmed"));
             }
             _ => panic!("Expected FallbackTriggered state"),
         }

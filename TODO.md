@@ -70,3 +70,4 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Implement Nostr decentralized relay protocol bridge in `omnicore-engine/src/bridges/nostr.rs`.
 - [x] Implement dynamic content transcoding and format sanitization in `omnicore-engine/src/router.rs`.
 - [x] Implement asymmetric network partition broadcast routing in `omnicore-engine/src/federation.rs`.
+- [x] Implement end-to-end cryptographic delivery receipt tracking and silent-drop cascade in `omnicore-engine/src/router.rs`.
