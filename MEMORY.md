@@ -25,7 +25,8 @@ Ongoing internal architectural observations, codebase traits, and design prefere
 - Encrypted Storage: SQLCipher with AES-256-GCM encryption (`cipher_page_size=4096`, `kdf_iter=256000`, `foreign_keys=ON`). Schema includes `contacts`, `mappings`, `threads`, `messages`, `attachments`, `key_store`, and `sync_tokens`. Complete design documented in `omnicore-engine/SCHEMA.md`.
 - Dispatcher: Multi-path timeout fallback engine in `omnicore-engine/src/dispatcher.rs` executing concurrent queues and automated protocol fallback.
 - Desktop UI: React 19 + TypeScript + Vite + TailwindCSS running inside Tauri v2 shell with system tray controls.
-- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.9.5).
+- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.9.6).
+- Multi-Bridge Active Health Probing: `omnicore-engine/src/router.rs` implements `BridgeHeartbeatProber` and `probe_and_recover_circuits`, actively testing open/half-open circuits with lightweight non-disruptive heartbeat pings to safely restore circuits to `Closed`.
 - Egress Deduplication Ledger: `EgressDeduplicationLedger` and `MultipathRouter::route_with_exact_once_deduplication` in `omnicore-engine/src/router.rs` track outbound message digests across a sliding time window (120s) to guarantee exact-once delivery during multi-bridge fallback cascades.
 - Latency Anomaly Spike Filter: `RouteAnomalyFilter` and `MultipathRouter::route_with_anomaly_damped_cascade` in `omnicore-engine/src/router.rs` clamp transient latency outliers (>4x baseline) using smoothed Exponential Moving Averages (EMA) to prevent false-positive circuit tripping.
 - Bridge Concurrency Guard: `BridgeConcurrencyGuard` and `MultipathRouter::route_with_concurrency_bounded_cascade` in `omnicore-engine/src/router.rs` bound simultaneous in-flight dispatch operations per protocol to prevent rate-limiting and modem serial contention.

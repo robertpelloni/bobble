@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.9.6:
+  - Multi-Bridge Active Health Probing & Heartbeat Keepalive: Implemented `BridgeHeartbeatProber` and `probe_and_recover_circuits`, `route_with_active_health_probing` in `omnicore-engine/src/router.rs`. Actively probes degraded, open, or half-open bridges using lightweight synthetic heartbeat pings (`PING:<nonce>`) to verify network viability, automatically transitioning recovering circuits back to `Closed` status and decrementing flapping trip counters upon success.
 - 0.9.5:
   - Multi-Bridge Egress Deduplication Ledger: Implemented `EgressDeduplicationLedger` and `route_with_exact_once_deduplication` in `omnicore-engine/src/router.rs`. Tracks outbound message digests and recipient tuples across a sliding time window (120s default) to guarantee exact-once delivery semantics during rapid failover cascades and eliminate multi-bridge duplicate message storms.
 - 0.9.4:

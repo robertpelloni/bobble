@@ -335,6 +335,20 @@ impl EgressDeduplicationLedger {
     }
 }
 
+/// Prober actively testing degraded, open, or half-open bridges using lightweight heartbeat keepalives.
+pub struct BridgeHeartbeatProber;
+
+impl BridgeHeartbeatProber {
+    /// Generates a synthetic ping heartbeat payload for non-disruptive bridge health probing.
+    pub fn create_probe_payload(probe_nonce: &str) -> MessagePayload {
+        MessagePayload {
+            recipient_id: "__omnicore_health_probe__".to_string(),
+            content: format!("PING:{}", probe_nonce),
+            fallback_protocol: "none".to_string(),
+        }
+    }
+}
+
 /// Filter smoothing transient latency spikes and preventing metric poisoning from isolated network anomalies.
 pub struct RouteAnomalyFilter;
 
@@ -1915,6 +1929,64 @@ impl MultipathRouter {
         // Step 2: Route via optimal cascade
         self.route_with_optimal_cascade(payload, primary, fallbacks, now_epoch).await
     }
+
+    /// Actively probes candidate bridges that are in Open or HalfOpen circuit states using
+    /// lightweight heartbeat pings, recovering closed circuit status upon confirmation.
+    pub async fn probe_and_recover_circuits(&self, now_epoch: u64) -> Vec<(ProtocolKind, bool)> {
+        let mut candidates_to_probe = Vec::new();
+        {
+            let mut reg = self.registry.write().await;
+            for (&proto, metric) in &mut reg.metrics {
+                if metric.circuit_state == CircuitState::HalfOpen || (metric.circuit_state == CircuitState::Open && metric.is_available_at(now_epoch)) {
+                    candidates_to_probe.push(proto);
+                }
+            }
+        }
+
+        let mut probe_results = Vec::new();
+        for proto in candidates_to_probe {
+            let bridge_opt = {
+                let reg = self.registry.read().await;
+                reg.get(proto)
+            };
+
+            if let Some(bridge_ref) = bridge_opt {
+                let bridge = bridge_ref.read().await;
+                let probe_payload = BridgeHeartbeatProber::create_probe_payload(&format!("probe_{}", now_epoch));
+                let start = std::time::Instant::now();
+                let success = bridge.send_message(&probe_payload).await.is_ok();
+                let lat = start.elapsed().as_millis() as u64;
+
+                let mut reg = self.registry.write().await;
+                reg.record_delivery_metrics(proto, lat, success, now_epoch);
+                if success {
+                    if let Some(m) = reg.metrics.get_mut(&proto) {
+                        m.circuit_state = CircuitState::Closed;
+                        m.consecutive_trips = m.consecutive_trips.saturating_sub(1);
+                    }
+                }
+                probe_results.push((proto, success));
+            }
+        }
+
+        probe_results
+    }
+
+    /// Dispatches with active background health probing: initiates heartbeat probes on degraded circuits
+    /// while executing normal cascading delivery for the current message.
+    pub async fn route_with_active_health_probing(
+        &self,
+        payload: &MessagePayload,
+        primary: ProtocolKind,
+        fallbacks: &[ProtocolKind],
+        now_epoch: u64,
+    ) -> Result<(ProtocolKind, DeliveryState)> {
+        // Trigger recovery probes for any flapping or half-open circuits
+        let _ = self.probe_and_recover_circuits(now_epoch).await;
+
+        // Execute optimal cascade dispatch
+        self.route_with_optimal_cascade(payload, primary, fallbacks, now_epoch).await
+    }
 }
 
 #[cfg(test)]
@@ -3196,5 +3268,82 @@ mod tests {
 
         assert!(dup_res.is_err());
         assert!(dup_res.unwrap_err().to_string().contains("duplicate message payload detected"));
+    }
+
+    #[test]
+    fn test_bridge_heartbeat_prober_payload_generation() {
+        let probe = BridgeHeartbeatProber::create_probe_payload("test_probe_nonce_999");
+        assert_eq!(probe.recipient_id, "__omnicore_health_probe__");
+        assert_eq!(probe.content, "PING:test_probe_nonce_999");
+        assert_eq!(probe.fallback_protocol, "none");
+    }
+
+    #[tokio::test]
+    async fn test_probe_and_recover_circuits_restores_half_open_bridge() {
+        let mut registry = BridgeRegistry::new();
+
+        // Register Matrix bridge, initialize it so heartbeat probe send will succeed
+        let mut matrix = MatrixBridge::new();
+        matrix.initialize().await.unwrap();
+        registry.register(ProtocolKind::Matrix, Box::new(matrix));
+
+        let now = 1700000000;
+        // Trip Matrix bridge circuit by recording 3 consecutive failures
+        registry.record_delivery_metrics(ProtocolKind::Matrix, 20, false, now);
+        registry.record_delivery_metrics(ProtocolKind::Matrix, 20, false, now);
+        registry.record_delivery_metrics(ProtocolKind::Matrix, 20, false, now);
+
+        {
+            let m = registry.get_metrics(ProtocolKind::Matrix).unwrap();
+            assert_eq!(m.circuit_state, CircuitState::Open);
+            assert_eq!(m.consecutive_trips, 1);
+        }
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+
+        // With 1 consecutive trip, effective cooldown is 30 * 2^1 = 60s.
+        // At now + 65, circuit cooldown has elapsed and moves to HalfOpen when probed.
+        // Active probing triggers heartbeat ping and restores circuit to Closed upon success!
+        let probe_results = router.probe_and_recover_circuits(now + 65).await;
+
+        assert_eq!(probe_results.len(), 1);
+        assert_eq!(probe_results[0].0, ProtocolKind::Matrix);
+        assert!(probe_results[0].1); // Probe succeeded
+
+        let reg_guard = router.registry.read().await;
+        let m = reg_guard.get_metrics(ProtocolKind::Matrix).unwrap();
+        assert_eq!(m.circuit_state, CircuitState::Closed);
+        assert_eq!(m.consecutive_trips, 0); // Decoupled/decremented on recovery
+    }
+
+    #[tokio::test]
+    async fn test_route_with_active_health_probing_execution() {
+        let mut registry = BridgeRegistry::new();
+
+        // 1. Matrix: initialized, healthy
+        let mut matrix = MatrixBridge::new();
+        matrix.initialize().await.unwrap();
+        registry.register(ProtocolKind::Matrix, Box::new(matrix));
+
+        // 2. Signal: initialized, healthy
+        let mut signal = SignalBridge::new();
+        signal.initialize().await.unwrap();
+        registry.register(ProtocolKind::Signal, Box::new(signal));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+
+        let payload = MessagePayload {
+            recipient_id: "!matrix_active_probing:matrix.org".to_string(),
+            content: "Testing active health probing route dispatch".to_string(),
+            fallback_protocol: "none".to_string(),
+        };
+
+        let (chosen, state) = router
+            .route_with_active_health_probing(&payload, ProtocolKind::Matrix, &[ProtocolKind::Signal], 1700000000)
+            .await
+            .expect("Active health probing dispatch should succeed");
+
+        assert_eq!(chosen, ProtocolKind::Matrix);
+        assert_eq!(state, DeliveryState::Delivered);
     }
 }
