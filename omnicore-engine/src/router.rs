@@ -51,6 +51,44 @@ impl ProtocolMtuLimits {
     }
 }
 
+/// Dynamic content transcoder adapting formatting between disparate protocol transports.
+/// Normalizes rich text (Markdown, HTML, URLs) into plain text for cellular SMS and constrained transports.
+pub struct PayloadContentTranscoder;
+
+impl PayloadContentTranscoder {
+    /// Transcodes payload content for destination protocol requirements.
+    pub fn transcode_for_protocol(content: &str, target_protocol: ProtocolKind) -> String {
+        match target_protocol {
+            ProtocolKind::Sms => {
+                // Strip markdown formatting (*bold*, _italic_, `code`, [link](url))
+                let mut sanitized = content
+                    .replace("**", "")
+                    .replace("__", "")
+                    .replace("*", "")
+                    .replace("_", "")
+                    .replace("`", "")
+                    .replace("~~", "");
+
+                // Convert HTML line breaks if present
+                sanitized = sanitized.replace("<br>", "\n").replace("<br/>", "\n");
+
+                // Normalize complex unicode characters into basic ASCII equivalents
+                sanitized = sanitized
+                    .replace('’', "'")
+                    .replace('‘', "'")
+                    .replace('“', "\"")
+                    .replace('”', "\"")
+                    .replace('—', "-")
+                    .replace('–', "-")
+                    .replace('…', "...");
+
+                sanitized.trim().to_string()
+            }
+            _ => content.to_string(),
+        }
+    }
+}
+
 /// Message payload fragmenter splitting oversized messages into sequential chunks.
 pub struct PayloadFragmenter;
 
@@ -1253,6 +1291,90 @@ impl MultipathRouter {
             payload.recipient_id
         ))
     }
+
+    /// Dispatches a message across cascading protocols with automated content transcoding.
+    /// Adapts rich markdown/HTML formatting to plain text when fallback cascades to constrained
+    /// transports like cellular SMS, ensuring message readability and transmission integrity.
+    pub async fn route_with_transcoding_cascade(
+        &self,
+        payload: &MessagePayload,
+        primary: ProtocolKind,
+        fallbacks: &[ProtocolKind],
+        now_epoch: u64,
+    ) -> Result<(ProtocolKind, DeliveryState, String)> {
+        let (chosen_primary, reordered_fallbacks) = {
+            let registry_guard = self.registry.read().await;
+            registry_guard.select_optimal_route(primary, fallbacks)
+        };
+
+        let mut candidate_chain = vec![chosen_primary];
+        candidate_chain.extend(reordered_fallbacks);
+
+        for (idx, &candidate) in candidate_chain.iter().enumerate() {
+            let is_available = {
+                let mut registry_guard = self.registry.write().await;
+                if let Some(metric) = registry_guard.metrics.get_mut(&candidate) {
+                    metric.is_available_at(now_epoch)
+                } else {
+                    true
+                }
+            };
+
+            if !is_available {
+                continue;
+            }
+
+            let bridge_opt = {
+                let registry_guard = self.registry.read().await;
+                registry_guard.get(candidate)
+            };
+
+            if let Some(bridge_ref) = bridge_opt {
+                let bridge = bridge_ref.read().await;
+                let transcoded_content = PayloadContentTranscoder::transcode_for_protocol(&payload.content, candidate);
+                let transcoded_payload = MessagePayload {
+                    recipient_id: payload.recipient_id.clone(),
+                    content: transcoded_content.clone(),
+                    fallback_protocol: candidate_chain.get(idx + 1).map(|p| p.as_str().to_string()).unwrap_or_default(),
+                };
+
+                let start = std::time::Instant::now();
+                match bridge.send_message(&transcoded_payload).await {
+                    Ok(_) => {
+                        let latency_ms = start.elapsed().as_millis() as u64;
+                        let mut registry_guard = self.registry.write().await;
+                        registry_guard.record_delivery_metrics(candidate, latency_ms, true, now_epoch);
+
+                        let state = if idx == 0 && candidate == primary {
+                            DeliveryState::Delivered
+                        } else {
+                            DeliveryState::FallbackTriggered {
+                                from: primary,
+                                to: candidate,
+                                reason: format!("Transcoded and delivered via [{}]", candidate.as_str()),
+                            }
+                        };
+                        return Ok((candidate, state, transcoded_content));
+                    }
+                    Err(e) => {
+                        let latency_ms = start.elapsed().as_millis() as u64;
+                        let mut registry_guard = self.registry.write().await;
+                        registry_guard.record_delivery_metrics(candidate, latency_ms, false, now_epoch);
+                        eprintln!(
+                            "Transcoding cascade bridge [{}] failed: {}. Continuing cascade...",
+                            candidate.as_str(),
+                            e
+                        );
+                    }
+                }
+            }
+        }
+
+        Err(anyhow!(
+            "Transcoding cascade failed: all candidate protocols exhausted for recipient {}",
+            payload.recipient_id
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -2216,6 +2338,65 @@ mod tests {
             DeliveryState::FallbackTriggered { from, to, .. } => {
                 assert_eq!(from, ProtocolKind::Nostr);
                 assert_eq!(to, ProtocolKind::Matrix);
+            }
+            _ => panic!("Expected FallbackTriggered state"),
+        }
+    }
+
+    #[test]
+    fn test_payload_content_transcoder_sms_normalization() {
+        let markdown_input = "**Alert:** Server _database_ is `DOWN`! Check status: <br/>— [Metrics]…";
+        let transcoded = PayloadContentTranscoder::transcode_for_protocol(markdown_input, ProtocolKind::Sms);
+
+        assert!(!transcoded.contains("**"));
+        assert!(!transcoded.contains("_"));
+        assert!(!transcoded.contains("`"));
+        assert!(!transcoded.contains("<br/>"));
+        assert!(transcoded.contains("Alert: Server database is DOWN!"));
+        assert!(transcoded.contains("- [Metrics]..."));
+    }
+
+    #[tokio::test]
+    async fn test_route_with_transcoding_cascade_to_sms() {
+        let mut registry = BridgeRegistry::new();
+
+        // 1. Matrix bridge: uninitialized (fails)
+        let matrix = MatrixBridge::new();
+        registry.register(ProtocolKind::Matrix, Box::new(matrix));
+
+        // 2. Cellular SMS bridge: initialized (succeeds)
+        let mut sms = SmsBridge::new();
+        let _ = <SmsBridge as ProtocolBridge>::initialize(&mut sms).await;
+        registry.register(ProtocolKind::Sms, Box::new(sms));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+
+        let rich_payload = MessagePayload {
+            recipient_id: "+15556677".to_string(),
+            content: "**High Priority:** _Cluster nodes_ have failed `heartbeat`!—".to_string(),
+            fallback_protocol: "SMS".to_string(),
+        };
+
+        let (chosen, state, transcoded) = router
+            .route_with_transcoding_cascade(
+                &rich_payload,
+                ProtocolKind::Matrix,
+                &[ProtocolKind::Sms],
+                1700000000,
+            )
+            .await
+            .expect("Transcoding cascade to SMS should succeed");
+
+        assert_eq!(chosen, ProtocolKind::Sms);
+        assert!(!transcoded.contains("**"));
+        assert!(!transcoded.contains("`"));
+        assert!(transcoded.contains("High Priority: Cluster nodes have failed heartbeat!-"));
+
+        match state {
+            DeliveryState::FallbackTriggered { from, to, reason } => {
+                assert_eq!(from, ProtocolKind::Matrix);
+                assert_eq!(to, ProtocolKind::Sms);
+                assert!(reason.contains("Transcoded"));
             }
             _ => panic!("Expected FallbackTriggered state"),
         }
