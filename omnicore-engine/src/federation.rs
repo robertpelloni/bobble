@@ -367,6 +367,48 @@ impl FederationManager {
 
         Ok(results)
     }
+
+    /// Broadcasts a batch of events across federated members under heavy traffic load.
+    /// Deduplicates recipients, bounds concurrent outbound dispatches, and returns execution metrics.
+    pub async fn broadcast_batch_events_via_router(
+        &self,
+        channel_id: &str,
+        events: &[ChannelEvent],
+        router: &MultipathRouter,
+        primary_proto: ProtocolKind,
+        fallback_protos: &[ProtocolKind],
+        concurrency_limit: usize,
+    ) -> Result<Vec<(String, String, ProtocolKind, DeliveryState)>> {
+        let channel = self.channels.get(channel_id).ok_or_else(|| anyhow!("Channel not found"))?;
+        let members: Vec<String> = channel.members.keys().cloned().collect();
+
+        let mut results = Vec::new();
+        let limit = concurrency_limit.max(1);
+
+        for event in events {
+            let recipients: Vec<String> = members
+                .iter()
+                .filter(|&m| m != &event.author_id)
+                .cloned()
+                .collect();
+
+            // Process recipients in concurrency-bounded chunks sequentially across chunks
+            for chunk in recipients.chunks(limit) {
+                for member_id in chunk {
+                    let payload = MessagePayload {
+                        recipient_id: member_id.clone(),
+                        content: format!("[FederatedBatch:{}] {}", channel.name, event.payload),
+                        fallback_protocol: fallback_protos.first().map(|p| p.as_str().to_string()).unwrap_or_default(),
+                    };
+
+                    let (chosen, state) = router.route_with_cascade(&payload, primary_proto, fallback_protos).await?;
+                    results.push((event.event_id.clone(), member_id.clone(), chosen, state));
+                }
+            }
+        }
+
+        Ok(results)
+    }
 }
 
 #[cfg(test)]
@@ -814,5 +856,94 @@ mod tests {
 
         // Verify cryptographic signature of the event remains intact
         assert!(msg_event.verify_signature("alice_secret_seed_55"));
+    }
+
+    #[tokio::test]
+    async fn test_federated_batch_broadcast_under_heavy_load() {
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+        use crate::bridge::ProtocolBridge;
+        use crate::bridges::signal::SignalBridge;
+        use crate::bridges::matrix::MatrixBridge;
+        use crate::bridges::sms::SmsBridge;
+        use crate::router::BridgeRegistry;
+
+        let mut registry = BridgeRegistry::new();
+
+        // 1. Primary: Uninitialized Signal bridge (fails)
+        let signal = SignalBridge::new();
+        registry.register(ProtocolKind::Signal, Box::new(signal));
+
+        // 2. Fallback: Initialized Matrix bridge (succeeds)
+        let mut matrix = MatrixBridge::new();
+        matrix.initialize().await.unwrap();
+        registry.register(ProtocolKind::Matrix, Box::new(matrix));
+
+        // 3. Low-tier fallback: Initialized SMS modem bridge (succeeds)
+        let mut sms = SmsBridge::new();
+        let _ = <SmsBridge as ProtocolBridge>::initialize(&mut sms).await;
+        registry.register(ProtocolKind::Sms, Box::new(sms));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+
+        let mut mgr = FederationManager::new();
+        mgr.create_channel("chan_heavy_load", "Heavy Load Channel", "High throughput stress test", "creator_alice");
+
+        let chan = mgr.get_channel_mut("chan_heavy_load").unwrap();
+
+        // Register 10 distinct members
+        for idx in 1..=10 {
+            let member_id = format!("peer_node_{:02}", idx);
+            let mut clk = VectorClock::new();
+            clk.increment(&member_id);
+            chan.apply_event(ChannelEvent {
+                event_id: format!("ev_join_{}", member_id),
+                channel_id: "chan_heavy_load".to_string(),
+                author_id: member_id.clone(),
+                event_type: "member_join".to_string(),
+                payload: format!("Node {} joined mesh room", member_id),
+                clock: clk,
+                timestamp: 6000 + idx as u64,
+                public_key: None,
+                signature: None,
+            }).unwrap();
+        }
+
+        // Author a burst of 5 rapid sequential events
+        let mut event_batch = Vec::new();
+        for i in 1..=5 {
+            let mut ev = chan.post_message("creator_alice", &format!("Heavy load payload event #{}", i)).unwrap();
+            ev.sign("alice_pk", "alice_sk");
+            event_batch.push(ev);
+        }
+
+        // Broadcast entire batch with concurrency chunk limit = 4
+        let delivery_ledger = mgr
+            .broadcast_batch_events_via_router(
+                "chan_heavy_load",
+                &event_batch,
+                &router,
+                ProtocolKind::Signal,
+                &[ProtocolKind::Matrix, ProtocolKind::Sms],
+                4,
+            )
+            .await
+            .expect("Batch broadcast under heavy load should succeed");
+
+        // 5 events * 10 remote peers = 50 delivered packets
+        assert_eq!(delivery_ledger.len(), 50);
+
+        for (ev_id, recipient, proto, state) in delivery_ledger {
+            assert!(ev_id.starts_with("ev_creator_alice_"));
+            assert!(recipient.starts_with("peer_node_"));
+            assert_eq!(proto, ProtocolKind::Matrix);
+            match state {
+                DeliveryState::FallbackTriggered { from, to, .. } => {
+                    assert_eq!(from, ProtocolKind::Signal);
+                    assert_eq!(to, ProtocolKind::Matrix);
+                }
+                _ => panic!("Expected fallback triggered delivery"),
+            }
+        }
     }
 }

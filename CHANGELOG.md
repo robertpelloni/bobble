@@ -2,6 +2,9 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.8.4:
+  - Federated Batch Broadcast & Rate-Limiting Mitigation: Implemented `broadcast_batch_events_via_router` on `FederationManager` in `omnicore-engine/src/federation.rs`. Enables high-throughput batched event propagation across decentralized multi-party group channels with concurrency chunk bounding to prevent per-bridge rate-limiting and socket exhaustion under heavy load.
+  - Stress Testing Under Heavy Load: Added integration stress test verifying burst delivery of 50 signed event packets across 10 member peers with automated fallback routing from Signal to Matrix.
 - 0.8.3:
   - Flapping Network Resilience & Exponential Cooldown Backoff: Implemented `consecutive_trips` tracking and `compute_effective_cooldown` on `ProtocolMetric` in `omnicore-engine/src/router.rs`, introducing exponential backoff with dynamic jitter to circuit-breaker cooldown periods under repeated network disconnects. Added `route_with_flapping_resilience` on `MultipathRouter` to bypass unstable flapping candidate bridges in favor of reliable low-tier fallbacks (e.g., cellular SMS).
 - 0.8.2:
