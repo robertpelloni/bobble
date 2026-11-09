@@ -214,6 +214,66 @@ impl ReceiptTracker {
     }
 }
 
+/// Concurrency guard bounding simultaneous in-flight dispatch operations per bridge protocol.
+/// Prevents modem serial port contention, socket starvation, and rate-limiting penalties under load.
+#[derive(Debug, Clone)]
+pub struct BridgeConcurrencyGuard {
+    limits: HashMap<ProtocolKind, usize>,
+    in_flight: HashMap<ProtocolKind, usize>,
+}
+
+impl Default for BridgeConcurrencyGuard {
+    fn default() -> Self {
+        let mut limits = HashMap::new();
+        limits.insert(ProtocolKind::Sms, 2); // Serial Hayes AT cellular modem bound to 2
+        limits.insert(ProtocolKind::Signal, 15);
+        limits.insert(ProtocolKind::Matrix, 20);
+        limits.insert(ProtocolKind::Discord, 10);
+        limits.insert(ProtocolKind::Nostr, 20);
+        limits.insert(ProtocolKind::Tox, 10);
+        limits.insert(ProtocolKind::Simplex, 10);
+        limits.insert(ProtocolKind::IMessage, 5);
+
+        Self {
+            limits,
+            in_flight: HashMap::new(),
+        }
+    }
+}
+
+impl BridgeConcurrencyGuard {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn set_limit(&mut self, protocol: ProtocolKind, max_concurrent: usize) {
+        self.limits.insert(protocol, max_concurrent);
+    }
+
+    /// Attempts to acquire a concurrency dispatch permit for the given protocol.
+    pub fn try_acquire_permit(&mut self, protocol: ProtocolKind) -> bool {
+        let limit = self.limits.get(&protocol).copied().unwrap_or(10);
+        let current = self.in_flight.entry(protocol).or_insert(0);
+        if *current < limit {
+            *current += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Releases a previously acquired concurrency permit.
+    pub fn release_permit(&mut self, protocol: ProtocolKind) {
+        if let Some(current) = self.in_flight.get_mut(&protocol) {
+            *current = current.saturating_sub(1);
+        }
+    }
+
+    pub fn in_flight_count(&self, protocol: ProtocolKind) -> usize {
+        self.in_flight.get(&protocol).copied().unwrap_or(0)
+    }
+}
+
 /// Guard ensuring message payload integrity and tamper detection across multi-protocol cascading fallbacks.
 pub struct PayloadIntegrityGuard;
 
@@ -1573,6 +1633,99 @@ impl MultipathRouter {
             payload.recipient_id
         ))
     }
+
+    /// Dispatches with active concurrency permit bounding per protocol bridge.
+    /// If candidate bridge has exhausted its concurrent dispatch quota (e.g. cellular modem in use),
+    /// immediately cascades to alternate candidate bridges to preserve high throughput.
+    pub async fn route_with_concurrency_bounded_cascade(
+        &self,
+        payload: &MessagePayload,
+        primary: ProtocolKind,
+        fallbacks: &[ProtocolKind],
+        concurrency_guard: &mut BridgeConcurrencyGuard,
+        now_epoch: u64,
+    ) -> Result<(ProtocolKind, DeliveryState)> {
+        let (chosen_primary, reordered_fallbacks) = {
+            let registry_guard = self.registry.read().await;
+            registry_guard.select_optimal_route(primary, fallbacks)
+        };
+
+        let mut candidate_chain = vec![chosen_primary];
+        candidate_chain.extend(reordered_fallbacks);
+
+        for (idx, &candidate) in candidate_chain.iter().enumerate() {
+            let is_available = {
+                let mut registry_guard = self.registry.write().await;
+                if let Some(metric) = registry_guard.metrics.get_mut(&candidate) {
+                    metric.is_available_at(now_epoch)
+                } else {
+                    true
+                }
+            };
+
+            if !is_available {
+                continue;
+            }
+
+            // Attempt to acquire concurrency permit
+            if !concurrency_guard.try_acquire_permit(candidate) {
+                eprintln!(
+                    "Bridge [{}] concurrency budget exhausted (in-flight: {}). Bypassing candidate...",
+                    candidate.as_str(),
+                    concurrency_guard.in_flight_count(candidate)
+                );
+                continue;
+            }
+
+            let bridge_opt = {
+                let registry_guard = self.registry.read().await;
+                registry_guard.get(candidate)
+            };
+
+            if let Some(bridge_ref) = bridge_opt {
+                let bridge = bridge_ref.read().await;
+                let start = std::time::Instant::now();
+                let send_res = bridge.send_message(payload).await;
+                concurrency_guard.release_permit(candidate);
+
+                match send_res {
+                    Ok(_) => {
+                        let latency_ms = start.elapsed().as_millis() as u64;
+                        let mut registry_guard = self.registry.write().await;
+                        registry_guard.record_delivery_metrics(candidate, latency_ms, true, now_epoch);
+
+                        let state = if idx == 0 && candidate == primary {
+                            DeliveryState::Delivered
+                        } else {
+                            DeliveryState::FallbackTriggered {
+                                from: primary,
+                                to: candidate,
+                                reason: format!("Concurrency bounded cascade delivered via [{}]", candidate.as_str()),
+                            }
+                        };
+                        return Ok((candidate, state));
+                    }
+                    Err(e) => {
+                        let latency_ms = start.elapsed().as_millis() as u64;
+                        let mut registry_guard = self.registry.write().await;
+                        registry_guard.record_delivery_metrics(candidate, latency_ms, false, now_epoch);
+                        eprintln!(
+                            "Concurrency bounded bridge [{}] dispatch failed: {}. Continuing cascade...",
+                            candidate.as_str(),
+                            e
+                        );
+                    }
+                }
+            } else {
+                concurrency_guard.release_permit(candidate);
+            }
+        }
+
+        Err(anyhow!(
+            "Concurrency bounded routing failed: all candidates exhausted or saturated for recipient {}",
+            payload.recipient_id
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -2672,6 +2825,73 @@ mod tests {
                 assert_eq!(from, ProtocolKind::Signal);
                 assert_eq!(to, ProtocolKind::Matrix);
                 assert!(reason.contains("Receipt confirmed"));
+            }
+            _ => panic!("Expected FallbackTriggered state"),
+        }
+    }
+
+    #[test]
+    fn test_bridge_concurrency_guard_limits_and_permits() {
+        let mut guard = BridgeConcurrencyGuard::new();
+        guard.set_limit(ProtocolKind::Sms, 2);
+
+        assert_eq!(guard.in_flight_count(ProtocolKind::Sms), 0);
+        assert!(guard.try_acquire_permit(ProtocolKind::Sms));
+        assert!(guard.try_acquire_permit(ProtocolKind::Sms));
+        assert_eq!(guard.in_flight_count(ProtocolKind::Sms), 2);
+
+        // 3rd permit fails due to saturation
+        assert!(!guard.try_acquire_permit(ProtocolKind::Sms));
+
+        // Release permit and re-acquire
+        guard.release_permit(ProtocolKind::Sms);
+        assert_eq!(guard.in_flight_count(ProtocolKind::Sms), 1);
+        assert!(guard.try_acquire_permit(ProtocolKind::Sms));
+    }
+
+    #[tokio::test]
+    async fn test_route_with_concurrency_bounded_cascade_bypasses_saturated_bridge() {
+        let mut registry = BridgeRegistry::new();
+
+        // 1. Primary Signal bridge: initialized (would succeed), but concurrency saturated
+        let mut signal = SignalBridge::new();
+        signal.initialize().await.unwrap();
+        registry.register(ProtocolKind::Signal, Box::new(signal));
+
+        // 2. Secondary Matrix bridge: initialized, unsaturated (succeeds)
+        let mut matrix = MatrixBridge::new();
+        matrix.initialize().await.unwrap();
+        registry.register(ProtocolKind::Matrix, Box::new(matrix));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+
+        let mut guard = BridgeConcurrencyGuard::new();
+        guard.set_limit(ProtocolKind::Signal, 1);
+        assert!(guard.try_acquire_permit(ProtocolKind::Signal)); // Exhaust Signal permit budget
+
+        let payload = MessagePayload {
+            recipient_id: "!matrix_bounded_room:matrix.org".to_string(),
+            content: "Concurrency saturation failover test".to_string(),
+            fallback_protocol: "Matrix".to_string(),
+        };
+
+        let (chosen, state) = router
+            .route_with_concurrency_bounded_cascade(
+                &payload,
+                ProtocolKind::Signal,
+                &[ProtocolKind::Matrix],
+                &mut guard,
+                1700000000,
+            )
+            .await
+            .expect("Should bypass saturated Signal bridge and deliver via Matrix");
+
+        assert_eq!(chosen, ProtocolKind::Matrix);
+        match state {
+            DeliveryState::FallbackTriggered { from, to, reason } => {
+                assert_eq!(from, ProtocolKind::Signal);
+                assert_eq!(to, ProtocolKind::Matrix);
+                assert!(reason.contains("Concurrency bounded"));
             }
             _ => panic!("Expected FallbackTriggered state"),
         }

@@ -26,7 +26,8 @@ Summarize everything learned during the session that was not obvious at the star
 - The desktop frontend UI was completely redesigned and consolidated into a high-value single-page multi-pane interface in React 19 + TypeScript + TailwindCSS.
 - Cross-platform mobile shell established in `omnicore-mobile/` using React Native / Expo, providing on-device conversation feeds, transport tags, and bridge telemetry.
 - Automation scripts were created in `scripts/`: `build.sh`, `test.sh`, `dev.sh`, `run.sh`.
-- Global version is governed by `VERSION.md` (0.9.2).
+- Global version is governed by `VERSION.md` (0.9.3).
+- Bridge concurrency permit bounding and saturation fallback (`BridgeConcurrencyGuard`, `route_with_concurrency_bounded_cascade`) added in `omnicore-engine/src/router.rs`.
 - Cryptographic delivery receipt confirmation and silent drop cascading (`route_with_confirmed_receipt`) added in `omnicore-engine/src/router.rs`.
 - Asymmetric network partition resilient broadcasting (`broadcast_event_with_partition_resilience`) added in `omnicore-engine/src/federation.rs`.
 - Cross-protocol content transcoding and format sanitization (`PayloadContentTranscoder`, `route_with_transcoding_cascade`) added in `omnicore-engine/src/router.rs`.
