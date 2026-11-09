@@ -274,6 +274,29 @@ impl BridgeConcurrencyGuard {
     }
 }
 
+/// Filter smoothing transient latency spikes and preventing metric poisoning from isolated network anomalies.
+pub struct RouteAnomalyFilter;
+
+impl RouteAnomalyFilter {
+    /// Computes smoothed latency using damped Exponential Moving Average (EMA).
+    /// If the incoming sample is > 4x the existing baseline, clamps the spike to 2x baseline
+    /// to avoid false-positive routing cascades from single-packet jitter.
+    pub fn compute_damped_latency(current_avg_ms: u64, sample_ms: u64) -> u64 {
+        if current_avg_ms == 0 {
+            return sample_ms;
+        }
+
+        let clamped_sample = if sample_ms > current_avg_ms.saturating_mul(4) {
+            current_avg_ms.saturating_mul(2)
+        } else {
+            sample_ms
+        };
+
+        // Standard 70/30 weight EMA
+        (current_avg_ms.saturating_mul(7) + clamped_sample.saturating_mul(3)) / 10
+    }
+}
+
 /// Guard ensuring message payload integrity and tamper detection across multi-protocol cascading fallbacks.
 pub struct PayloadIntegrityGuard;
 
@@ -1726,6 +1749,88 @@ impl MultipathRouter {
             payload.recipient_id
         ))
     }
+
+    /// Dispatches with active anomaly latency dampening, preventing isolated packet spikes
+    /// from causing premature deprioritization and false-positive cascading fallbacks.
+    pub async fn route_with_anomaly_damped_cascade(
+        &self,
+        payload: &MessagePayload,
+        primary: ProtocolKind,
+        fallbacks: &[ProtocolKind],
+        now_epoch: u64,
+    ) -> Result<(ProtocolKind, DeliveryState)> {
+        let (chosen_primary, reordered_fallbacks) = {
+            let registry_guard = self.registry.read().await;
+            registry_guard.select_optimal_route(primary, fallbacks)
+        };
+
+        let mut candidate_chain = vec![chosen_primary];
+        candidate_chain.extend(reordered_fallbacks);
+
+        for (idx, &candidate) in candidate_chain.iter().enumerate() {
+            let is_available = {
+                let mut registry_guard = self.registry.write().await;
+                if let Some(metric) = registry_guard.metrics.get_mut(&candidate) {
+                    metric.is_available_at(now_epoch)
+                } else {
+                    true
+                }
+            };
+
+            if !is_available {
+                continue;
+            }
+
+            let bridge_opt = {
+                let registry_guard = self.registry.read().await;
+                registry_guard.get(candidate)
+            };
+
+            if let Some(bridge_ref) = bridge_opt {
+                let bridge = bridge_ref.read().await;
+                let start = std::time::Instant::now();
+                match bridge.send_message(payload).await {
+                    Ok(_) => {
+                        let sample_latency = start.elapsed().as_millis() as u64;
+                        let mut registry_guard = self.registry.write().await;
+                        let m = registry_guard.metrics.entry(candidate).or_default();
+                        m.total_attempts += 1;
+                        m.successful_attempts += 1;
+                        m.consecutive_failures = 0;
+                        m.circuit_state = CircuitState::Closed;
+                        // Apply anomaly damped latency smoothing
+                        m.average_latency_ms = RouteAnomalyFilter::compute_damped_latency(m.average_latency_ms, sample_latency);
+
+                        let state = if idx == 0 && candidate == primary {
+                            DeliveryState::Delivered
+                        } else {
+                            DeliveryState::FallbackTriggered {
+                                from: primary,
+                                to: candidate,
+                                reason: format!("Damped fallback delivered via [{}]", candidate.as_str()),
+                            }
+                        };
+                        return Ok((candidate, state));
+                    }
+                    Err(e) => {
+                        let latency_ms = start.elapsed().as_millis() as u64;
+                        let mut registry_guard = self.registry.write().await;
+                        registry_guard.record_delivery_metrics(candidate, latency_ms, false, now_epoch);
+                        eprintln!(
+                            "Damped cascade bridge [{}] failed: {}. Continuing cascade...",
+                            candidate.as_str(),
+                            e
+                        );
+                    }
+                }
+            }
+        }
+
+        Err(anyhow!(
+            "Anomaly damped routing failed: all candidates exhausted for recipient {}",
+            payload.recipient_id
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -2892,6 +2997,60 @@ mod tests {
                 assert_eq!(from, ProtocolKind::Signal);
                 assert_eq!(to, ProtocolKind::Matrix);
                 assert!(reason.contains("Concurrency bounded"));
+            }
+            _ => panic!("Expected FallbackTriggered state"),
+        }
+    }
+
+    #[test]
+    fn test_route_anomaly_filter_damps_single_packet_spike() {
+        let baseline = 50u64;
+        let outlier_spike = 10_000u64; // Extreme 10s packet jitter
+
+        // Raw EMA without damping would spike from 50 to 3035ms!
+        // Damped EMA clamps sample to 2x baseline (100ms) -> (50*7 + 100*3)/10 = 65ms
+        let smoothed = RouteAnomalyFilter::compute_damped_latency(baseline, outlier_spike);
+        assert_eq!(smoothed, 65);
+        assert!(smoothed < 100);
+    }
+
+    #[tokio::test]
+    async fn test_route_with_anomaly_damped_cascade_delivery() {
+        let mut registry = BridgeRegistry::new();
+
+        // 1. Signal bridge: uninitialized (fails)
+        let signal = SignalBridge::new();
+        registry.register(ProtocolKind::Signal, Box::new(signal));
+
+        // 2. Matrix bridge: initialized (succeeds)
+        let mut matrix = MatrixBridge::new();
+        matrix.initialize().await.unwrap();
+        registry.register(ProtocolKind::Matrix, Box::new(matrix));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+
+        let payload = MessagePayload {
+            recipient_id: "!matrix_damped_room:matrix.org".to_string(),
+            content: "Anomaly damped latency fallback test".to_string(),
+            fallback_protocol: "Matrix".to_string(),
+        };
+
+        let (chosen, state) = router
+            .route_with_anomaly_damped_cascade(
+                &payload,
+                ProtocolKind::Signal,
+                &[ProtocolKind::Matrix],
+                1700000000,
+            )
+            .await
+            .expect("Anomaly damped cascade should deliver via Matrix");
+
+        assert_eq!(chosen, ProtocolKind::Matrix);
+        match state {
+            DeliveryState::FallbackTriggered { from, to, reason } => {
+                assert_eq!(from, ProtocolKind::Signal);
+                assert_eq!(to, ProtocolKind::Matrix);
+                assert!(reason.contains("Damped fallback"));
             }
             _ => panic!("Expected FallbackTriggered state"),
         }

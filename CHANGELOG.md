@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.9.4:
+  - Latency Anomaly Spike Filter & Damped Routing: Implemented `RouteAnomalyFilter` and `route_with_anomaly_damped_cascade` in `omnicore-engine/src/router.rs`. Clamps single-packet jitter outliers (>4x baseline) using smoothed Exponential Moving Averages (EMA) to prevent transient latency anomalies from poisoning bridge health metrics and triggering premature circuit-tripping.
 - 0.9.3:
   - Bridge Concurrency Guard & Saturation-Aware Fallback: Implemented `BridgeConcurrencyGuard` and `route_with_concurrency_bounded_cascade` in `omnicore-engine/src/router.rs`. Dynamically bounds concurrent in-flight dispatch operations per protocol (e.g. limiting serial cellular SMS to 2 concurrent operations) and immediately cascades to unsaturated alternate candidate bridges to preserve throughput and prevent modem lockups.
 - 0.9.2:

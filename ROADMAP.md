@@ -79,4 +79,5 @@ Major, long-term structural milestones and structural plans.
 - [x] Asymmetric network partition resilient broadcasting (`broadcast_event_with_partition_resilience` in `federation.rs`).
 - [x] End-to-end cryptographic delivery receipt tracking and silent-drop cascade (`route_with_confirmed_receipt` in `router.rs`).
 - [x] Bridge concurrency permit bounding and saturation-aware fallback cascade (`route_with_concurrency_bounded_cascade` in `router.rs`).
+- [x] Route anomaly latency spike filtering and damped cascade routing (`route_with_anomaly_damped_cascade` in `router.rs`).
 - [ ] Full Milestone 6 verification and multi-node hardware test suite.
