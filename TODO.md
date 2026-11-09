@@ -67,3 +67,4 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Implement cross-protocol dynamic address translation and unified message routing in `omnicore-engine/src/router.rs`.
 - [x] Implement store-and-forward mesh relay bridge gateway adapter in `omnicore-engine/src/mesh.rs`.
 - [x] Implement dynamic cross-protocol packet fragmentation and MTU adaptation in `omnicore-engine/src/router.rs`.
+- [x] Implement Nostr decentralized relay protocol bridge in `omnicore-engine/src/bridges/nostr.rs`.

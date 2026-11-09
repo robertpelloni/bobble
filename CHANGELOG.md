@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.8.9:
+  - Nostr Protocol Bridge & Multi-Path Relay: Implemented `NostrBridge` in `omnicore-engine/src/bridges/nostr.rs` and added `ProtocolKind::Nostr` in `omnicore-engine/src/models.rs`. Provides censorship-resistant message transmission across WebSocket relay pools (NIP-01, NIP-04 encrypted DMs) with Schnorr key validation. Added integration test verifying multi-path cascade failover from Nostr relays to Matrix homeservers.
 - 0.8.8:
   - Cross-Protocol Packet Fragmentation & MTU Adaptor: Implemented `ProtocolMtuLimits`, `PayloadFragmenter`, and `route_with_fragmentation_adaptive_cascade` in `omnicore-engine/src/router.rs`. Automatically splits oversized message payloads into sequence-numbered, checksum-validated chunks when cascading to constrained transports (such as Cellular SMS with 140-char MTU or Tox P2P MTU constraints), tracking multi-part delivery states.
 - 0.8.7:

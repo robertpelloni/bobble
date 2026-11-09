@@ -5,3 +5,4 @@ pub mod simplex;
 pub mod tox;
 pub mod sms;
 pub mod imessage;
+pub mod nostr;

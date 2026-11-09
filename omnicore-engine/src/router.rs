@@ -2182,4 +2182,42 @@ mod tests {
             _ => panic!("Expected FallbackTriggered state"),
         }
     }
+
+    #[tokio::test]
+    async fn test_multipath_router_nostr_to_matrix_fallback() {
+        use crate::bridges::nostr::NostrBridge;
+
+        let mut registry = BridgeRegistry::new();
+
+        // 1. Primary: Uninitialized Nostr bridge (will fail)
+        let nostr = NostrBridge::new();
+        registry.register(ProtocolKind::Nostr, Box::new(nostr));
+
+        // 2. Fallback: Initialized Matrix bridge (will succeed)
+        let mut matrix = MatrixBridge::new();
+        matrix.initialize().await.unwrap();
+        registry.register(ProtocolKind::Matrix, Box::new(matrix));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+
+        let payload = MessagePayload {
+            recipient_id: "!nostr_matrix_room:matrix.org".to_string(),
+            content: "Nostr relay network partition failover to Matrix".to_string(),
+            fallback_protocol: "Matrix".to_string(),
+        };
+
+        let (chosen, state) = router
+            .route_with_cascade(&payload, ProtocolKind::Nostr, &[ProtocolKind::Matrix])
+            .await
+            .expect("Nostr to Matrix fallback should succeed");
+
+        assert_eq!(chosen, ProtocolKind::Matrix);
+        match state {
+            DeliveryState::FallbackTriggered { from, to, .. } => {
+                assert_eq!(from, ProtocolKind::Nostr);
+                assert_eq!(to, ProtocolKind::Matrix);
+            }
+            _ => panic!("Expected FallbackTriggered state"),
+        }
+    }
 }
