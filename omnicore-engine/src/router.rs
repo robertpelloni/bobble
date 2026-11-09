@@ -274,6 +274,67 @@ impl BridgeConcurrencyGuard {
     }
 }
 
+/// Egress deduplication ledger ensuring exact-once transmission semantics across multi-protocol fallback cascades.
+pub struct EgressDeduplicationLedger {
+    transmitted_digests: HashMap<String, u64>, // digest -> expiration timestamp
+    dedup_window_sec: u64,
+}
+
+impl Default for EgressDeduplicationLedger {
+    fn default() -> Self {
+        Self {
+            transmitted_digests: HashMap::new(),
+            dedup_window_sec: 120, // 2-minute deduplication window
+        }
+    }
+}
+
+impl EgressDeduplicationLedger {
+    pub fn new(dedup_window_sec: u64) -> Self {
+        Self {
+            transmitted_digests: HashMap::new(),
+            dedup_window_sec,
+        }
+    }
+
+    /// Checks if a payload digest for a recipient has already been transmitted within the window.
+    /// If fresh, records it with an expiration timestamp and returns true.
+    pub fn check_and_record_transmission(&mut self, recipient: &str, content: &str, now_sec: u64) -> bool {
+        let mut sum: u64 = 0xcbf29ce484222325;
+        for &b in recipient.as_bytes() {
+            sum ^= b as u64;
+            sum = sum.wrapping_mul(0x100000001b3);
+        }
+        sum ^= b':' as u64;
+        sum = sum.wrapping_mul(0x100000001b3);
+        for &b in content.as_bytes() {
+            sum ^= b as u64;
+            sum = sum.wrapping_mul(0x100000001b3);
+        }
+        let digest = format!("{:016x}", sum);
+
+        if let Some(&expires_at) = self.transmitted_digests.get(&digest) {
+            if expires_at > now_sec {
+                return false; // Duplicate detected
+            }
+        }
+
+        self.transmitted_digests.insert(digest, now_sec + self.dedup_window_sec);
+        true
+    }
+
+    /// Prunes expired transmissions from the deduplication ledger.
+    pub fn prune_expired(&mut self, now_sec: u64) -> usize {
+        let initial = self.transmitted_digests.len();
+        self.transmitted_digests.retain(|_, &mut exp| exp > now_sec);
+        initial - self.transmitted_digests.len()
+    }
+
+    pub fn tracked_count(&self) -> usize {
+        self.transmitted_digests.len()
+    }
+}
+
 /// Filter smoothing transient latency spikes and preventing metric poisoning from isolated network anomalies.
 pub struct RouteAnomalyFilter;
 
@@ -1831,6 +1892,29 @@ impl MultipathRouter {
             payload.recipient_id
         ))
     }
+
+    /// Dispatches with exact-once delivery semantics across multi-bridge cascades.
+    /// Checks the EgressDeduplicationLedger to reject redundant outbound transmissions of the
+    /// same message content to the same recipient during rapid failover attempts or split-brain races.
+    pub async fn route_with_exact_once_deduplication(
+        &self,
+        payload: &MessagePayload,
+        primary: ProtocolKind,
+        fallbacks: &[ProtocolKind],
+        ledger: &mut EgressDeduplicationLedger,
+        now_epoch: u64,
+    ) -> Result<(ProtocolKind, DeliveryState)> {
+        // Step 1: Check deduplication ledger
+        if !ledger.check_and_record_transmission(&payload.recipient_id, &payload.content, now_epoch) {
+            return Err(anyhow!(
+                "Exact-once delivery check rejected transmission: duplicate message payload detected for recipient {}",
+                payload.recipient_id
+            ));
+        }
+
+        // Step 2: Route via optimal cascade
+        self.route_with_optimal_cascade(payload, primary, fallbacks, now_epoch).await
+    }
 }
 
 #[cfg(test)]
@@ -3054,5 +3138,63 @@ mod tests {
             }
             _ => panic!("Expected FallbackTriggered state"),
         }
+    }
+
+    #[test]
+    fn test_egress_deduplication_ledger_sliding_window() {
+        let mut ledger = EgressDeduplicationLedger::new(60); // 60s window
+        let now = 1000;
+
+        assert!(ledger.check_and_record_transmission("+15551111", "Hello world", now));
+        assert_eq!(ledger.tracked_count(), 1);
+
+        // Immediate duplicate transmission rejected
+        assert!(!ledger.check_and_record_transmission("+15551111", "Hello world", now + 10));
+
+        // Different message or recipient allowed
+        assert!(ledger.check_and_record_transmission("+15552222", "Hello world", now + 10));
+        assert!(ledger.check_and_record_transmission("+15551111", "Different text", now + 10));
+        assert_eq!(ledger.tracked_count(), 3);
+
+        // After window expires (now + 65 = 1065), the first record (exp 1060) is expired, allowing re-record
+        assert!(ledger.check_and_record_transmission("+15551111", "Hello world", now + 65));
+        // All 3 initial transmissions have exp <= 1070. At 1075, the remaining two from t=1010 have expired, plus the refreshed one has exp 1125
+        let pruned = ledger.prune_expired(now + 75);
+        assert_eq!(pruned, 2);
+        assert_eq!(ledger.tracked_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_route_with_exact_once_deduplication_enforcement() {
+        let mut registry = BridgeRegistry::new();
+        let mut signal = SignalBridge::new();
+        signal.initialize().await.unwrap();
+        registry.register(ProtocolKind::Signal, Box::new(signal));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+        let mut ledger = EgressDeduplicationLedger::new(60);
+
+        let payload = MessagePayload {
+            recipient_id: "+15553344".to_string(),
+            content: "Exact-once delivery check payload".to_string(),
+            fallback_protocol: "none".to_string(),
+        };
+
+        // 1. Initial send: succeeds and records transmission in ledger
+        let (chosen, state) = router
+            .route_with_exact_once_deduplication(&payload, ProtocolKind::Signal, &[], &mut ledger, 1700000000)
+            .await
+            .expect("First dispatch should succeed");
+
+        assert_eq!(chosen, ProtocolKind::Signal);
+        assert_eq!(state, DeliveryState::Delivered);
+
+        // 2. Rapid re-transmission attempt of same content: rejected by exact-once check
+        let dup_res = router
+            .route_with_exact_once_deduplication(&payload, ProtocolKind::Signal, &[], &mut ledger, 1700000010)
+            .await;
+
+        assert!(dup_res.is_err());
+        assert!(dup_res.unwrap_err().to_string().contains("duplicate message payload detected"));
     }
 }

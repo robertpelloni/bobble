@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.9.5:
+  - Multi-Bridge Egress Deduplication Ledger: Implemented `EgressDeduplicationLedger` and `route_with_exact_once_deduplication` in `omnicore-engine/src/router.rs`. Tracks outbound message digests and recipient tuples across a sliding time window (120s default) to guarantee exact-once delivery semantics during rapid failover cascades and eliminate multi-bridge duplicate message storms.
 - 0.9.4:
   - Latency Anomaly Spike Filter & Damped Routing: Implemented `RouteAnomalyFilter` and `route_with_anomaly_damped_cascade` in `omnicore-engine/src/router.rs`. Clamps single-packet jitter outliers (>4x baseline) using smoothed Exponential Moving Averages (EMA) to prevent transient latency anomalies from poisoning bridge health metrics and triggering premature circuit-tripping.
 - 0.9.3:

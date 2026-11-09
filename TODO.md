@@ -73,3 +73,4 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Implement end-to-end cryptographic delivery receipt tracking and silent-drop cascade in `omnicore-engine/src/router.rs`.
 - [x] Implement bridge concurrency permit bounding and saturation fallback in `omnicore-engine/src/router.rs`.
 - [x] Implement latency anomaly spike filtering and damped cascade routing in `omnicore-engine/src/router.rs`.
+- [x] Implement multi-bridge egress deduplication ledger and exact-once delivery enforcement in `omnicore-engine/src/router.rs`.
