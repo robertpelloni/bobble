@@ -112,6 +112,89 @@ impl RouteCostOptimizer {
     }
 }
 
+/// Sliding-window byte quota and rate limiter for metered or bandwidth-constrained protocol bridges.
+#[derive(Debug, Clone)]
+pub struct RouteBandwidthShaper {
+    byte_limits: HashMap<ProtocolKind, usize>,
+    consumed_bytes: HashMap<ProtocolKind, Vec<(u64, usize)>>, // protocol -> vec of (timestamp_sec, byte_count)
+    window_duration_sec: u64,
+}
+
+impl Default for RouteBandwidthShaper {
+    fn default() -> Self {
+        let mut byte_limits = HashMap::new();
+        byte_limits.insert(ProtocolKind::Sms, 2048); // 2 KB window budget for cellular SMS
+        byte_limits.insert(ProtocolKind::Tox, 1024 * 1024); // 1 MB window budget for P2P Tox
+
+        Self {
+            byte_limits,
+            consumed_bytes: HashMap::new(),
+            window_duration_sec: 60, // 60s sliding window
+        }
+    }
+}
+
+impl RouteBandwidthShaper {
+    pub fn new(window_duration_sec: u64) -> Self {
+        Self {
+            byte_limits: HashMap::new(),
+            consumed_bytes: HashMap::new(),
+            window_duration_sec,
+        }
+    }
+
+    /// Sets the byte consumption allowance within the sliding window for a protocol.
+    pub fn set_byte_limit(&mut self, protocol: ProtocolKind, max_bytes: usize) {
+        self.byte_limits.insert(protocol, max_bytes);
+    }
+
+    /// Prunes expired consumption records outside the sliding window.
+    pub fn prune_expired(&mut self, now_sec: u64) {
+        let cutoff = now_sec.saturating_sub(self.window_duration_sec);
+        for entries in self.consumed_bytes.values_mut() {
+            entries.retain(|&(ts, _)| ts > cutoff);
+        }
+    }
+
+    /// Calculates currently consumed bytes within the sliding window.
+    pub fn current_usage(&self, protocol: ProtocolKind, now_sec: u64) -> usize {
+        let cutoff = now_sec.saturating_sub(self.window_duration_sec);
+        self.consumed_bytes
+            .get(&protocol)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter(|&&(ts, _)| ts > cutoff)
+                    .map(|&(_, bytes)| bytes)
+                    .sum()
+            })
+            .unwrap_or(0)
+    }
+
+    /// Checks if the payload fits within the remaining bandwidth budget. If allowed, records the usage.
+    pub fn try_consume_bandwidth(
+        &mut self,
+        protocol: ProtocolKind,
+        byte_len: usize,
+        now_sec: u64,
+    ) -> bool {
+        self.prune_expired(now_sec);
+
+        if let Some(&limit) = self.byte_limits.get(&protocol) {
+            let usage = self.current_usage(protocol, now_sec);
+            if usage.saturating_add(byte_len) > limit {
+                return false; // Quota exceeded
+            }
+        }
+
+        self.consumed_bytes
+            .entry(protocol)
+            .or_default()
+            .push((now_sec, byte_len));
+        true
+    }
+}
+
 /// Dynamic content transcoder adapting formatting between disparate protocol transports.
 /// Normalizes rich text (Markdown, HTML, URLs) into plain text for cellular SMS and constrained transports.
 pub struct PayloadContentTranscoder;
@@ -2099,6 +2182,95 @@ impl MultipathRouter {
 
         Ok((chosen, state))
     }
+
+    /// Dispatches with active bandwidth shaping and quota enforcement.
+    /// If candidate bridge has exhausted its sliding-window byte budget (e.g. metered cellular SMS),
+    /// automatically cascades to unmetered fallback bridges to prevent overage charges or network throttling.
+    pub async fn route_with_bandwidth_throttled_cascade(
+        &self,
+        payload: &MessagePayload,
+        primary: ProtocolKind,
+        fallbacks: &[ProtocolKind],
+        shaper: &mut RouteBandwidthShaper,
+        now_epoch: u64,
+    ) -> Result<(ProtocolKind, DeliveryState)> {
+        let (chosen_primary, reordered_fallbacks) = {
+            let registry_guard = self.registry.read().await;
+            registry_guard.select_optimal_route(primary, fallbacks)
+        };
+
+        let mut candidate_chain = vec![chosen_primary];
+        candidate_chain.extend(reordered_fallbacks);
+        let payload_bytes = payload.content.len();
+
+        for (idx, &candidate) in candidate_chain.iter().enumerate() {
+            let is_available = {
+                let mut registry_guard = self.registry.write().await;
+                if let Some(metric) = registry_guard.metrics.get_mut(&candidate) {
+                    metric.is_available_at(now_epoch)
+                } else {
+                    true
+                }
+            };
+
+            if !is_available {
+                continue;
+            }
+
+            // Check bandwidth shaper allowance
+            if !shaper.try_consume_bandwidth(candidate, payload_bytes, now_epoch) {
+                eprintln!(
+                    "Bridge [{}] bandwidth quota exceeded (current usage: {} bytes). Cascading...",
+                    candidate.as_str(),
+                    shaper.current_usage(candidate, now_epoch)
+                );
+                continue;
+            }
+
+            let bridge_opt = {
+                let registry_guard = self.registry.read().await;
+                registry_guard.get(candidate)
+            };
+
+            if let Some(bridge_ref) = bridge_opt {
+                let bridge = bridge_ref.read().await;
+                let start = std::time::Instant::now();
+                match bridge.send_message(payload).await {
+                    Ok(_) => {
+                        let latency_ms = start.elapsed().as_millis() as u64;
+                        let mut registry_guard = self.registry.write().await;
+                        registry_guard.record_delivery_metrics(candidate, latency_ms, true, now_epoch);
+
+                        let state = if idx == 0 && candidate == primary {
+                            DeliveryState::Delivered
+                        } else {
+                            DeliveryState::FallbackTriggered {
+                                from: primary,
+                                to: candidate,
+                                reason: format!("Bandwidth throttled fallback delivered via [{}]", candidate.as_str()),
+                            }
+                        };
+                        return Ok((candidate, state));
+                    }
+                    Err(e) => {
+                        let latency_ms = start.elapsed().as_millis() as u64;
+                        let mut registry_guard = self.registry.write().await;
+                        registry_guard.record_delivery_metrics(candidate, latency_ms, false, now_epoch);
+                        eprintln!(
+                            "Bandwidth throttled cascade bridge [{}] failed: {}. Continuing cascade...",
+                            candidate.as_str(),
+                            e
+                        );
+                    }
+                }
+            }
+        }
+
+        Err(anyhow!(
+            "Bandwidth throttled routing failed: all candidates exhausted or quota limited for recipient {}",
+            payload.recipient_id
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -2494,6 +2666,82 @@ mod tests {
             DeliveryState::FallbackTriggered { from, to, .. } => {
                 assert_eq!(from, ProtocolKind::IMessage);
                 assert_eq!(to, ProtocolKind::Sms);
+            }
+            _ => panic!("Expected FallbackTriggered state"),
+        }
+    }
+
+    #[test]
+    fn test_route_bandwidth_shaper_quota_and_sliding_window() {
+        let mut shaper = RouteBandwidthShaper::new(60); // 60s sliding window
+        shaper.set_byte_limit(ProtocolKind::Sms, 100);
+
+        let now = 1000;
+        // First 60 bytes: allowed
+        assert!(shaper.try_consume_bandwidth(ProtocolKind::Sms, 60, now));
+        assert_eq!(shaper.current_usage(ProtocolKind::Sms, now), 60);
+
+        // Next 30 bytes: allowed (total 90 <= 100)
+        assert!(shaper.try_consume_bandwidth(ProtocolKind::Sms, 30, now + 10));
+        assert_eq!(shaper.current_usage(ProtocolKind::Sms, now + 10), 90);
+
+        // Next 20 bytes: rejected (90 + 20 > 100)
+        assert!(!shaper.try_consume_bandwidth(ProtocolKind::Sms, 20, now + 20));
+        assert_eq!(shaper.current_usage(ProtocolKind::Sms, now + 20), 90);
+
+        // After window expires (now + 65 = 1065), the first 60 bytes expire (t=1000), leaving 30 bytes
+        assert_eq!(shaper.current_usage(ProtocolKind::Sms, now + 65), 30);
+        // Now 50 bytes can fit (30 + 50 = 80 <= 100)
+        assert!(shaper.try_consume_bandwidth(ProtocolKind::Sms, 50, now + 65));
+        assert_eq!(shaper.current_usage(ProtocolKind::Sms, now + 65), 80);
+    }
+
+    #[tokio::test]
+    async fn test_route_with_bandwidth_throttled_cascade_failover() {
+        let mut registry = BridgeRegistry::new();
+
+        // 1. Cellular SMS bridge: initialized, but tight bandwidth limit (50 bytes)
+        let mut sms = SmsBridge::new();
+        let _ = <SmsBridge as ProtocolBridge>::initialize(&mut sms).await;
+        registry.register(ProtocolKind::Sms, Box::new(sms));
+
+        // 2. Matrix bridge: initialized, unmetered
+        let mut matrix = MatrixBridge::new();
+        matrix.initialize().await.unwrap();
+        registry.register(ProtocolKind::Matrix, Box::new(matrix));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+        let mut shaper = RouteBandwidthShaper::new(60);
+        shaper.set_byte_limit(ProtocolKind::Sms, 50);
+
+        // Pre-consume 40 bytes on SMS
+        assert!(shaper.try_consume_bandwidth(ProtocolKind::Sms, 40, 1700000000));
+
+        let payload = MessagePayload {
+            recipient_id: "!matrix_bw_room:matrix.org".to_string(),
+            content: "This message is 48 bytes long and exceeds SMS!".to_string(),
+            fallback_protocol: "none".to_string(),
+        };
+
+        // When dispatching with SMS primary, bandwidth quota exceeds 50 bytes (40 + 48 = 88 > 50),
+        // triggering automatic cascade to Matrix!
+        let (chosen, state) = router
+            .route_with_bandwidth_throttled_cascade(
+                &payload,
+                ProtocolKind::Sms,
+                &[ProtocolKind::Matrix],
+                &mut shaper,
+                1700000005,
+            )
+            .await
+            .expect("Bandwidth throttled cascade should deliver via Matrix");
+
+        assert_eq!(chosen, ProtocolKind::Matrix);
+        match state {
+            DeliveryState::FallbackTriggered { from, to, reason } => {
+                assert_eq!(from, ProtocolKind::Sms);
+                assert_eq!(to, ProtocolKind::Matrix);
+                assert!(reason.contains("Bandwidth throttled"));
             }
             _ => panic!("Expected FallbackTriggered state"),
         }

@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.9.8:
+  - Sliding-Window Bandwidth Quota & Traffic Shaper: Implemented `RouteBandwidthShaper` and `MultipathRouter::route_with_bandwidth_throttled_cascade` in `omnicore-engine/src/router.rs`. Monitors per-transport byte consumption over sliding time windows (60s default) and prevents overages on metered channels (cellular SMS 2KB budget) by automatically triggering graceful fallback to unmetered bridges (Matrix, Signal).
 - 0.9.7:
   - Cross-Protocol Route Cost & QoS Optimizer: Implemented `RouteCostOptimizer`, `QosRoutingPreference`, and `MultipathRouter::route_with_cost_and_qos_optimization` in `omnicore-engine/src/router.rs`. Dynamically prioritizes routes balancing financial transit cost (e.g. favoring zero-cost internet/Matrix over metered cellular SMS), battery drain profiles (favoring low-power Wi-Fi/mesh over high-power cellular transmitters), and emergency low-latency requirements.
 - 0.9.6:
