@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.9.7:
+  - Cross-Protocol Route Cost & QoS Optimizer: Implemented `RouteCostOptimizer`, `QosRoutingPreference`, and `MultipathRouter::route_with_cost_and_qos_optimization` in `omnicore-engine/src/router.rs`. Dynamically prioritizes routes balancing financial transit cost (e.g. favoring zero-cost internet/Matrix over metered cellular SMS), battery drain profiles (favoring low-power Wi-Fi/mesh over high-power cellular transmitters), and emergency low-latency requirements.
 - 0.9.6:
   - Multi-Bridge Active Health Probing & Heartbeat Keepalive: Implemented `BridgeHeartbeatProber` and `probe_and_recover_circuits`, `route_with_active_health_probing` in `omnicore-engine/src/router.rs`. Actively probes degraded, open, or half-open bridges using lightweight synthetic heartbeat pings (`PING:<nonce>`) to verify network viability, automatically transitioning recovering circuits back to `Closed` status and decrementing flapping trip counters upon success.
 - 0.9.5:

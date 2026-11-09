@@ -26,7 +26,8 @@ Summarize everything learned during the session that was not obvious at the star
 - The desktop frontend UI was completely redesigned and consolidated into a high-value single-page multi-pane interface in React 19 + TypeScript + TailwindCSS.
 - Cross-platform mobile shell established in `omnicore-mobile/` using React Native / Expo, providing on-device conversation feeds, transport tags, and bridge telemetry.
 - Automation scripts were created in `scripts/`: `build.sh`, `test.sh`, `dev.sh`, `run.sh`.
-- Global version is governed by `VERSION.md` (0.9.6).
+- Global version is governed by `VERSION.md` (0.9.7).
+- Cross-Protocol Route Cost & QoS Optimizer: Implemented `RouteCostOptimizer` and `MultipathRouter::route_with_cost_and_qos_optimization` in `omnicore-engine/src/router.rs` balancing financial cost, battery drain profiles, and low-latency transport modes.
 - Multi-Bridge Active Health Probing: Implemented `BridgeHeartbeatProber` and `probe_and_recover_circuits`, `route_with_active_health_probing` in `omnicore-engine/src/router.rs` proactively probing open and half-open bridges to test recovery and transition circuits back to `Closed`.
 - Multi-bridge egress deduplication ledger and exact-once delivery (`EgressDeduplicationLedger`, `route_with_exact_once_deduplication`) added in `omnicore-engine/src/router.rs`.
 - Latency anomaly spike filtering and damped cascade routing (`RouteAnomalyFilter`, `route_with_anomaly_damped_cascade`) added in `omnicore-engine/src/router.rs`.

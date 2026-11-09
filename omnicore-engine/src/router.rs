@@ -51,6 +51,67 @@ impl ProtocolMtuLimits {
     }
 }
 
+/// QoS and routing policy preferences balancing financial cost, battery efficiency, and delivery speed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QosRoutingPreference {
+    /// Prioritize low financial cost (prefers free internet/P2P over metered cellular SMS)
+    CostSaving,
+    /// Prioritize lowest battery consumption (prefers low-power local mesh/Wi-Fi over power-heavy cellular modems)
+    BatteryPreservation,
+    /// Prioritize minimal latency regardless of transport cost (emergency mode)
+    UltraLowLatency,
+}
+
+/// Dynamic QoS and route cost optimizer evaluating financial cost, battery drain tier, and transport overhead.
+pub struct RouteCostOptimizer;
+
+impl RouteCostOptimizer {
+    /// Returns financial transport cost unit score (0 = free internet/DHT, 50 = metered cellular SMS).
+    pub fn financial_cost_units(protocol: ProtocolKind) -> u64 {
+        match protocol {
+            ProtocolKind::Sms => 50, // Paid cellular SMS segment
+            _ => 0,                  // Unmetered broadband/internet/P2P transports
+        }
+    }
+
+    /// Returns estimated battery consumption score per dispatch (1 = low power Wi-Fi/mesh, 40 = cellular radio transmit).
+    pub fn battery_drain_score(protocol: ProtocolKind) -> u64 {
+        match protocol {
+            ProtocolKind::Sms => 40,    // High power radio TX
+            ProtocolKind::Tox => 15,    // P2P UDP keepalive background drain
+            ProtocolKind::Simplex => 5, // SimpleX HTTP queue polling
+            _ => 2,                     // Standard TCP/WebSocket connections
+        }
+    }
+
+    /// Computes unified composite QoS penalty score for a given candidate protocol.
+    /// Lower score = preferred route.
+    pub fn compute_qos_score(
+        protocol: ProtocolKind,
+        latency_ms: u64,
+        preference: QosRoutingPreference,
+    ) -> u64 {
+        let base_lat = if latency_ms == 0 { 50 } else { latency_ms };
+        let fin_cost = Self::financial_cost_units(protocol);
+        let bat_cost = Self::battery_drain_score(protocol);
+
+        match preference {
+            QosRoutingPreference::CostSaving => {
+                // Financial cost heavily weighted (x100)
+                base_lat.saturating_add(fin_cost.saturating_mul(100)).saturating_add(bat_cost.saturating_mul(2))
+            }
+            QosRoutingPreference::BatteryPreservation => {
+                // Battery drain score heavily weighted (x50)
+                base_lat.saturating_add(bat_cost.saturating_mul(50)).saturating_add(fin_cost.saturating_mul(5))
+            }
+            QosRoutingPreference::UltraLowLatency => {
+                // Latency is primary factor, cost/battery negligible
+                base_lat.saturating_add(fin_cost).saturating_add(bat_cost)
+            }
+        }
+    }
+}
+
 /// Dynamic content transcoder adapting formatting between disparate protocol transports.
 /// Normalizes rich text (Markdown, HTML, URLs) into plain text for cellular SMS and constrained transports.
 pub struct PayloadContentTranscoder;
@@ -1987,6 +2048,57 @@ impl MultipathRouter {
         // Execute optimal cascade dispatch
         self.route_with_optimal_cascade(payload, primary, fallbacks, now_epoch).await
     }
+
+    /// Dispatches with dynamic route cost and QoS optimization: reorders candidate bridges according
+    /// to specified user preferences (financial cost, battery conservation, ultra-low latency)
+    /// while honoring circuit breaker availability and metric feedback.
+    pub async fn route_with_cost_and_qos_optimization(
+        &self,
+        payload: &MessagePayload,
+        primary: ProtocolKind,
+        fallbacks: &[ProtocolKind],
+        preference: QosRoutingPreference,
+        now_epoch: u64,
+    ) -> Result<(ProtocolKind, DeliveryState)> {
+        let mut candidates = vec![primary];
+        for &fb in fallbacks {
+            if !candidates.contains(&fb) {
+                candidates.push(fb);
+            }
+        }
+
+        {
+            let reg = self.registry.read().await;
+            candidates.sort_by(|a, b| {
+                let lat_a = reg.metrics.get(a).map(|m| m.average_latency_ms).unwrap_or(50);
+                let lat_b = reg.metrics.get(b).map(|m| m.average_latency_ms).unwrap_or(50);
+
+                let score_a = RouteCostOptimizer::compute_qos_score(*a, lat_a, preference);
+                let score_b = RouteCostOptimizer::compute_qos_score(*b, lat_b, preference);
+                score_a.cmp(&score_b)
+            });
+        }
+
+        let chosen_primary = candidates[0];
+        let remaining_fallbacks = candidates[1..].to_vec();
+
+        let (chosen, mut state) = self.route_with_optimal_cascade(
+            payload,
+            chosen_primary,
+            &remaining_fallbacks,
+            now_epoch,
+        ).await?;
+
+        if chosen != primary {
+            state = DeliveryState::FallbackTriggered {
+                from: primary,
+                to: chosen,
+                reason: format!("QoS optimizer preferred [{}] based on {:?}", chosen.as_str(), preference),
+            };
+        }
+
+        Ok((chosen, state))
+    }
 }
 
 #[cfg(test)]
@@ -3345,5 +3457,84 @@ mod tests {
 
         assert_eq!(chosen, ProtocolKind::Matrix);
         assert_eq!(state, DeliveryState::Delivered);
+    }
+
+    #[test]
+    fn test_route_cost_optimizer_scoring_modes() {
+        // SMS has 50 financial units and 40 battery drain score
+        // Matrix has 0 financial units and 2 battery drain score
+        let sms_cost_score = RouteCostOptimizer::compute_qos_score(
+            ProtocolKind::Sms,
+            30,
+            QosRoutingPreference::CostSaving,
+        );
+        let matrix_cost_score = RouteCostOptimizer::compute_qos_score(
+            ProtocolKind::Matrix,
+            30,
+            QosRoutingPreference::CostSaving,
+        );
+
+        // In CostSaving mode, SMS penalty should far exceed Matrix (free)
+        assert!(sms_cost_score > matrix_cost_score);
+
+        // In UltraLowLatency mode with SMS having 10ms and Matrix having 200ms
+        let sms_fast = RouteCostOptimizer::compute_qos_score(
+            ProtocolKind::Sms,
+            10,
+            QosRoutingPreference::UltraLowLatency,
+        );
+        let matrix_slow = RouteCostOptimizer::compute_qos_score(
+            ProtocolKind::Matrix,
+            200,
+            QosRoutingPreference::UltraLowLatency,
+        );
+
+        // Fast SMS should be preferred over slow Matrix in UltraLowLatency
+        assert!(sms_fast < matrix_slow);
+    }
+
+    #[tokio::test]
+    async fn test_route_with_cost_and_qos_optimization_prefers_cost_saving() {
+        let mut registry = BridgeRegistry::new();
+
+        // 1. Initialized SMS bridge (metered, higher financial cost)
+        let mut sms = SmsBridge::new();
+        let _ = <SmsBridge as ProtocolBridge>::initialize(&mut sms).await;
+        registry.register(ProtocolKind::Sms, Box::new(sms));
+
+        // 2. Initialized Matrix bridge (unmetered, zero financial cost)
+        let mut matrix = MatrixBridge::new();
+        matrix.initialize().await.unwrap();
+        registry.register(ProtocolKind::Matrix, Box::new(matrix));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+
+        let payload = MessagePayload {
+            recipient_id: "!matrix_qos_room:matrix.org".to_string(),
+            content: "Testing cost-saving QoS route selection".to_string(),
+            fallback_protocol: "none".to_string(),
+        };
+
+        // When requesting SMS as primary with CostSaving preference, router promotes Matrix
+        let (chosen, state) = router
+            .route_with_cost_and_qos_optimization(
+                &payload,
+                ProtocolKind::Sms,
+                &[ProtocolKind::Matrix],
+                QosRoutingPreference::CostSaving,
+                1700000000,
+            )
+            .await
+            .expect("QoS route optimization should succeed");
+
+        assert_eq!(chosen, ProtocolKind::Matrix);
+        match state {
+            DeliveryState::FallbackTriggered { from, to, reason } => {
+                assert_eq!(from, ProtocolKind::Sms);
+                assert_eq!(to, ProtocolKind::Matrix);
+                assert!(reason.contains("CostSaving"));
+            }
+            _ => panic!("Expected FallbackTriggered state"),
+        }
     }
 }
