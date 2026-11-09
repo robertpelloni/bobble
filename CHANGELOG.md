@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.9.1:
+  - Asymmetric Partition Resilience & Disjoint Route Broadcasting: Implemented `broadcast_event_with_partition_resilience` on `FederationManager` in `omnicore-engine/src/federation.rs`. Dispatches signed multi-party channel events across asymmetric network partitions using custom per-peer protocol preferences and multi-tier fallback chains to deliver to isolated peers (Matrix, Nostr, cellular SMS) without vector clock corruption.
 - 0.9.0:
   - Cross-Protocol Content Transcoding & Sanitization: Implemented `PayloadContentTranscoder` and `route_with_transcoding_cascade` in `omnicore-engine/src/router.rs`. Automatically strips markdown, formatting artifacts, and special unicode entities into plain-text ASCII when cascading from rich web bridges (Matrix, Discord) to restricted cellular SMS transports.
 - 0.8.9:

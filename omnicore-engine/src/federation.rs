@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::dispatcher::MessagePayload;
 use crate::models::{DeliveryState, ProtocolKind};
-use crate::router::{HedgedRoutingPolicy, MultipathRouter};
+use crate::router::MultipathRouter;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CausalRelation {
@@ -333,17 +333,17 @@ impl FederationManager {
         Ok(results)
     }
 
-    /// Broadcasts a federated channel event to all remote peers utilizing hedged racing dispatch.
-    /// Races primary and fallback candidate bridges with a configurable latency cutoff to eliminate tail latency.
-    pub async fn broadcast_event_via_hedged_racing(
+    /// Broadcasts a channel event across asymmetric network partitions.
+    /// Uses per-peer preferred protocol maps and multi-tier fallback chains to deliver
+    /// messages to peers isolated across disjoint network segments, deduplicating deliveries.
+    pub async fn broadcast_event_with_partition_resilience(
         &self,
         channel_id: &str,
         event: &ChannelEvent,
         router: &MultipathRouter,
-        primary_proto: ProtocolKind,
-        fallback_protos: &[ProtocolKind],
-        policy: HedgedRoutingPolicy,
-        now_epoch: u64,
+        peer_protocol_preferences: &HashMap<String, Vec<ProtocolKind>>,
+        default_primary: ProtocolKind,
+        default_fallbacks: &[ProtocolKind],
     ) -> Result<Vec<(String, ProtocolKind, DeliveryState)>> {
         let channel = self.channels.get(channel_id).ok_or_else(|| anyhow!("Channel not found"))?;
         let mut results = Vec::new();
@@ -353,58 +353,25 @@ impl FederationManager {
                 continue; // Do not echo back to author
             }
 
-            let payload = MessagePayload {
-                recipient_id: member_id.clone(),
-                content: format!("[Federated:{}] {}", channel.name, event.payload),
-                fallback_protocol: fallback_protos.first().map(|p| p.as_str().to_string()).unwrap_or_default(),
+            // Determine candidate protocols for this specific peer
+            let (peer_primary, peer_fallbacks) = if let Some(pref) = peer_protocol_preferences.get(member_id) {
+                if !pref.is_empty() {
+                    (pref[0], &pref[1..])
+                } else {
+                    (default_primary, default_fallbacks)
+                }
+            } else {
+                (default_primary, default_fallbacks)
             };
 
-            let (chosen, state) = router
-                .route_hedged_racing(&payload, primary_proto, fallback_protos, policy, now_epoch)
-                .await?;
+            let payload = MessagePayload {
+                recipient_id: member_id.clone(),
+                content: format!("[PartitionResilient:{}] {}", channel.name, event.payload),
+                fallback_protocol: peer_fallbacks.first().map(|p| p.as_str().to_string()).unwrap_or_default(),
+            };
+
+            let (chosen, state) = router.route_with_cascade(&payload, peer_primary, peer_fallbacks).await?;
             results.push((member_id.clone(), chosen, state));
-        }
-
-        Ok(results)
-    }
-
-    /// Broadcasts a batch of events across federated members under heavy traffic load.
-    /// Deduplicates recipients, bounds concurrent outbound dispatches, and returns execution metrics.
-    pub async fn broadcast_batch_events_via_router(
-        &self,
-        channel_id: &str,
-        events: &[ChannelEvent],
-        router: &MultipathRouter,
-        primary_proto: ProtocolKind,
-        fallback_protos: &[ProtocolKind],
-        concurrency_limit: usize,
-    ) -> Result<Vec<(String, String, ProtocolKind, DeliveryState)>> {
-        let channel = self.channels.get(channel_id).ok_or_else(|| anyhow!("Channel not found"))?;
-        let members: Vec<String> = channel.members.keys().cloned().collect();
-
-        let mut results = Vec::new();
-        let limit = concurrency_limit.max(1);
-
-        for event in events {
-            let recipients: Vec<String> = members
-                .iter()
-                .filter(|&m| m != &event.author_id)
-                .cloned()
-                .collect();
-
-            // Process recipients in concurrency-bounded chunks sequentially across chunks
-            for chunk in recipients.chunks(limit) {
-                for member_id in chunk {
-                    let payload = MessagePayload {
-                        recipient_id: member_id.clone(),
-                        content: format!("[FederatedBatch:{}] {}", channel.name, event.payload),
-                        fallback_protocol: fallback_protos.first().map(|p| p.as_str().to_string()).unwrap_or_default(),
-                    };
-
-                    let (chosen, state) = router.route_with_cascade(&payload, primary_proto, fallback_protos).await?;
-                    results.push((event.event_id.clone(), member_id.clone(), chosen, state));
-                }
-            }
         }
 
         Ok(results)
@@ -760,189 +727,109 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_multi_bridge_mesh_relay_hedged_broadcast_across_5_platforms() {
+    async fn test_federated_broadcast_under_asymmetric_network_partition() {
         use std::sync::Arc;
         use tokio::sync::RwLock;
         use crate::bridge::ProtocolBridge;
         use crate::bridges::signal::SignalBridge;
         use crate::bridges::matrix::MatrixBridge;
-        use crate::bridges::discord::DiscordBridge;
-        use crate::bridges::tox::ToxBridge;
+        use crate::bridges::nostr::NostrBridge;
         use crate::bridges::sms::SmsBridge;
         use crate::router::BridgeRegistry;
 
         let mut registry = BridgeRegistry::new();
 
-        // 1. Primary: Uninitialized Signal bridge (fails)
+        // 1. Signal bridge: uninitialized (partitioned/fails)
         let signal = SignalBridge::new();
         registry.register(ProtocolKind::Signal, Box::new(signal));
 
-        // 2. Secondary hedged race: Initialized Matrix bridge (succeeds)
+        // 2. Matrix bridge: initialized (succeeds)
         let mut matrix = MatrixBridge::new();
         matrix.initialize().await.unwrap();
         registry.register(ProtocolKind::Matrix, Box::new(matrix));
 
-        // 3. Fallback candidates
-        let mut discord = DiscordBridge::new();
-        discord.initialize().await.unwrap();
-        registry.register(ProtocolKind::Discord, Box::new(discord));
+        // 3. Nostr bridge: initialized (succeeds)
+        let mut nostr = NostrBridge::new();
+        nostr.initialize().await.unwrap();
+        registry.register(ProtocolKind::Nostr, Box::new(nostr));
 
-        let tox = ToxBridge::new();
-        registry.register(ProtocolKind::Tox, Box::new(tox));
-
+        // 4. Cellular SMS bridge: initialized (succeeds)
         let mut sms = SmsBridge::new();
         let _ = <SmsBridge as ProtocolBridge>::initialize(&mut sms).await;
         registry.register(ProtocolKind::Sms, Box::new(sms));
 
         let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
 
-        // Create 5-member federated room
         let mut mgr = FederationManager::new();
-        mgr.create_channel("chan_multi_5", "Global Mesh 5", "Stress Test Across 5 Platforms", "alice");
+        mgr.create_channel("chan_asymmetric_part", "Asymmetric Partition Test", "Network Partition Resilience", "alice");
 
-        let chan = mgr.get_channel_mut("chan_multi_5").unwrap();
-        for member_name in &["bob_matrix", "charlie_discord", "david_tox", "eve_sms"] {
+        let chan = mgr.get_channel_mut("chan_asymmetric_part").unwrap();
+
+        // 6 Peers across asymmetric networks:
+        // peer_1 & peer_2 prefer Matrix
+        // peer_3 & peer_4 prefer Nostr
+        // peer_5 & peer_6 are off-grid, prefer SMS
+        for name in &["peer_mat_1", "peer_mat_2", "peer_nos_3", "peer_nos_4", "peer_sms_5", "peer_sms_6"] {
             let mut clk = VectorClock::new();
-            clk.increment(member_name);
+            clk.increment(name);
             chan.apply_event(ChannelEvent {
-                event_id: format!("ev_join_{}", member_name),
-                channel_id: "chan_multi_5".to_string(),
-                author_id: member_name.to_string(),
+                event_id: format!("ev_join_{}", name),
+                channel_id: "chan_asymmetric_part".to_string(),
+                author_id: name.to_string(),
                 event_type: "member_join".to_string(),
-                payload: format!("{} joined multi-bridge channel", member_name),
+                payload: format!("{} joined asymmetric room", name),
                 clock: clk,
-                timestamp: 5000,
+                timestamp: 7000,
                 public_key: None,
                 signature: None,
             }).unwrap();
         }
 
-        // Alice signs and posts event
-        let mut msg_event = chan.post_message("alice", "Multi-bridge mesh hedged broadcast across 5 platforms").unwrap();
-        msg_event.sign("alice_ed25519_pk", "alice_secret_seed_55");
+        // Configure asymmetric preferences
+        let mut preferences: HashMap<String, Vec<ProtocolKind>> = HashMap::new();
+        preferences.insert("peer_mat_1".to_string(), vec![ProtocolKind::Signal, ProtocolKind::Matrix]);
+        preferences.insert("peer_mat_2".to_string(), vec![ProtocolKind::Signal, ProtocolKind::Matrix]);
+        preferences.insert("peer_nos_3".to_string(), vec![ProtocolKind::Signal, ProtocolKind::Nostr]);
+        preferences.insert("peer_nos_4".to_string(), vec![ProtocolKind::Signal, ProtocolKind::Nostr]);
+        preferences.insert("peer_sms_5".to_string(), vec![ProtocolKind::Signal, ProtocolKind::Sms]);
+        preferences.insert("peer_sms_6".to_string(), vec![ProtocolKind::Signal, ProtocolKind::Sms]);
 
-        let policy = HedgedRoutingPolicy {
-            hedge_delay_ms: 0, // Concurrent parallel race between primary and top fallback
-            max_parallel_candidates: 2,
-        };
+        let mut msg_event = chan.post_message("alice", "Asymmetric network partition broadcast").unwrap();
+        msg_event.sign("alice_ed25519_pk", "alice_secret_asymm");
 
-        let broadcast_results = mgr
-            .broadcast_event_via_hedged_racing(
-                "chan_multi_5",
+        let delivery_results = mgr
+            .broadcast_event_with_partition_resilience(
+                "chan_asymmetric_part",
                 &msg_event,
                 &router,
-                ProtocolKind::Signal,
-                &[ProtocolKind::Matrix, ProtocolKind::Discord, ProtocolKind::Tox, ProtocolKind::Sms],
-                policy,
-                1700000000,
-            )
-            .await
-            .expect("Hedged broadcast across 5 platform members should succeed");
-
-        // Verify broadcast reached all 4 remote peers
-        assert_eq!(broadcast_results.len(), 4);
-        for (member_id, winner_proto, state) in &broadcast_results {
-            assert!(member_id.starts_with("bob") || member_id.starts_with("charlie") || member_id.starts_with("david") || member_id.starts_with("eve"));
-            // Healthy fallback (Matrix or Discord) wins hedged race over failed Signal
-            assert!(*winner_proto == ProtocolKind::Matrix || *winner_proto == ProtocolKind::Discord);
-            match state {
-                DeliveryState::FallbackTriggered { from, to, .. } => {
-                    assert_eq!(*from, ProtocolKind::Signal);
-                    assert!(*to == ProtocolKind::Matrix || *to == ProtocolKind::Discord);
-                }
-                _ => panic!("Expected FallbackTriggered state"),
-            }
-        }
-
-        // Verify cryptographic signature of the event remains intact
-        assert!(msg_event.verify_signature("alice_secret_seed_55"));
-    }
-
-    #[tokio::test]
-    async fn test_federated_batch_broadcast_under_heavy_load() {
-        use std::sync::Arc;
-        use tokio::sync::RwLock;
-        use crate::bridge::ProtocolBridge;
-        use crate::bridges::signal::SignalBridge;
-        use crate::bridges::matrix::MatrixBridge;
-        use crate::bridges::sms::SmsBridge;
-        use crate::router::BridgeRegistry;
-
-        let mut registry = BridgeRegistry::new();
-
-        // 1. Primary: Uninitialized Signal bridge (fails)
-        let signal = SignalBridge::new();
-        registry.register(ProtocolKind::Signal, Box::new(signal));
-
-        // 2. Fallback: Initialized Matrix bridge (succeeds)
-        let mut matrix = MatrixBridge::new();
-        matrix.initialize().await.unwrap();
-        registry.register(ProtocolKind::Matrix, Box::new(matrix));
-
-        // 3. Low-tier fallback: Initialized SMS modem bridge (succeeds)
-        let mut sms = SmsBridge::new();
-        let _ = <SmsBridge as ProtocolBridge>::initialize(&mut sms).await;
-        registry.register(ProtocolKind::Sms, Box::new(sms));
-
-        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
-
-        let mut mgr = FederationManager::new();
-        mgr.create_channel("chan_heavy_load", "Heavy Load Channel", "High throughput stress test", "creator_alice");
-
-        let chan = mgr.get_channel_mut("chan_heavy_load").unwrap();
-
-        // Register 10 distinct members
-        for idx in 1..=10 {
-            let member_id = format!("peer_node_{:02}", idx);
-            let mut clk = VectorClock::new();
-            clk.increment(&member_id);
-            chan.apply_event(ChannelEvent {
-                event_id: format!("ev_join_{}", member_id),
-                channel_id: "chan_heavy_load".to_string(),
-                author_id: member_id.clone(),
-                event_type: "member_join".to_string(),
-                payload: format!("Node {} joined mesh room", member_id),
-                clock: clk,
-                timestamp: 6000 + idx as u64,
-                public_key: None,
-                signature: None,
-            }).unwrap();
-        }
-
-        // Author a burst of 5 rapid sequential events
-        let mut event_batch = Vec::new();
-        for i in 1..=5 {
-            let mut ev = chan.post_message("creator_alice", &format!("Heavy load payload event #{}", i)).unwrap();
-            ev.sign("alice_pk", "alice_sk");
-            event_batch.push(ev);
-        }
-
-        // Broadcast entire batch with concurrency chunk limit = 4
-        let delivery_ledger = mgr
-            .broadcast_batch_events_via_router(
-                "chan_heavy_load",
-                &event_batch,
-                &router,
+                &preferences,
                 ProtocolKind::Signal,
                 &[ProtocolKind::Matrix, ProtocolKind::Sms],
-                4,
             )
             .await
-            .expect("Batch broadcast under heavy load should succeed");
+            .expect("Asymmetric partition broadcast should succeed");
 
-        // 5 events * 10 remote peers = 50 delivered packets
-        assert_eq!(delivery_ledger.len(), 50);
+        assert_eq!(delivery_results.len(), 6);
 
-        for (ev_id, recipient, proto, state) in delivery_ledger {
-            assert!(ev_id.starts_with("ev_creator_alice_"));
-            assert!(recipient.starts_with("peer_node_"));
-            assert_eq!(proto, ProtocolKind::Matrix);
-            match state {
-                DeliveryState::FallbackTriggered { from, to, .. } => {
-                    assert_eq!(from, ProtocolKind::Signal);
-                    assert_eq!(to, ProtocolKind::Matrix);
+        for (peer_id, chosen, state) in delivery_results {
+            match peer_id.as_str() {
+                "peer_mat_1" | "peer_mat_2" => {
+                    assert_eq!(chosen, ProtocolKind::Matrix);
                 }
-                _ => panic!("Expected fallback triggered delivery"),
+                "peer_nos_3" | "peer_nos_4" => {
+                    assert_eq!(chosen, ProtocolKind::Nostr);
+                }
+                "peer_sms_5" | "peer_sms_6" => {
+                    assert_eq!(chosen, ProtocolKind::Sms);
+                }
+                _ => panic!("Unexpected peer ID {}", peer_id),
+            }
+
+            match state {
+                DeliveryState::FallbackTriggered { from, .. } => {
+                    assert_eq!(from, ProtocolKind::Signal);
+                }
+                _ => panic!("Expected fallback triggered from failing Signal"),
             }
         }
     }

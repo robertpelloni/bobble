@@ -76,4 +76,5 @@ Major, long-term structural milestones and structural plans.
 - [x] Dynamic cross-protocol packet fragmentation and MTU adaptation (`route_with_fragmentation_adaptive_cascade` in `router.rs`).
 - [x] Nostr censorship-resistant relay bridge (`NostrBridge` in `bridges/nostr.rs`).
 - [x] Cross-protocol content transcoding and format sanitization (`route_with_transcoding_cascade` in `router.rs`).
+- [x] Asymmetric network partition resilient broadcasting (`broadcast_event_with_partition_resilience` in `federation.rs`).
 - [ ] Full Milestone 6 verification and multi-node hardware test suite.

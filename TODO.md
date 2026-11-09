@@ -69,3 +69,4 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Implement dynamic cross-protocol packet fragmentation and MTU adaptation in `omnicore-engine/src/router.rs`.
 - [x] Implement Nostr decentralized relay protocol bridge in `omnicore-engine/src/bridges/nostr.rs`.
 - [x] Implement dynamic content transcoding and format sanitization in `omnicore-engine/src/router.rs`.
+- [x] Implement asymmetric network partition broadcast routing in `omnicore-engine/src/federation.rs`.
