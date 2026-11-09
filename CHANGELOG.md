@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.8.7:
+  - Mesh Relay Bridge Gateway Adapter: Implemented `MeshRelayBridgeAdapter` in `omnicore-engine/src/mesh.rs`. Connects local P2P store-and-forward mesh topologies (BLE Mesh, Wi-Fi Direct) with external internet protocol bridges via `MultipathRouter::route_with_cascade`, allowing partitioned or offline mesh nodes to seamlessly egress messages through gateway nodes to internet and cellular networks.
 - 0.8.6:
   - Cross-Protocol Recipient Translation & Unified Routing: Implemented `CrossProtocolAddressBook` and `route_unified_message` in `omnicore-engine/src/router.rs`. Automatically translates high-level unified contact identities to protocol-native destination addresses (Signal E.164, Matrix user ID, Discord channel ID, SMS number) at each fallback stage of a cascading dispatch.
 - 0.8.5:

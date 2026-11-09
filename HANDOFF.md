@@ -26,7 +26,8 @@ Summarize everything learned during the session that was not obvious at the star
 - The desktop frontend UI was completely redesigned and consolidated into a high-value single-page multi-pane interface in React 19 + TypeScript + TailwindCSS.
 - Cross-platform mobile shell established in `omnicore-mobile/` using React Native / Expo, providing on-device conversation feeds, transport tags, and bridge telemetry.
 - Automation scripts were created in `scripts/`: `build.sh`, `test.sh`, `dev.sh`, `run.sh`.
-- Global version is governed by `VERSION.md` (0.8.6).
+- Global version is governed by `VERSION.md` (0.8.7).
+- Store-and-forward mesh relay bridge gateway adapter (`MeshRelayBridgeAdapter`) added in `omnicore-engine/src/mesh.rs`.
 - Cross-protocol address book translation (`CrossProtocolAddressBook`) and unified contact routing (`route_unified_message`) added in `omnicore-engine/src/router.rs`.
 - Penalty-weighted candidate selection (`select_penalty_weighted_route`) and cascade routing added in `omnicore-engine/src/router.rs`.
 - High-throughput batch event broadcasting (`broadcast_batch_events_via_router`) with rate-limiting and stress testing added in `omnicore-engine/src/federation.rs`.

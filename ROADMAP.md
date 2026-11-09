@@ -72,4 +72,5 @@ Major, long-term structural milestones and structural plans.
 - [x] Federated batch event broadcast with concurrency rate limiting under heavy load (`broadcast_batch_events_via_router` in `federation.rs`).
 - [x] Penalty-weighted route selection and proactive degradation avoidance (`route_with_penalty_weighted_cascade` in `router.rs`).
 - [x] Cross-protocol address book translation and unified contact routing (`route_unified_message` in `router.rs`).
+- [x] Store-and-forward mesh relay bridge gateway adapter (`MeshRelayBridgeAdapter` in `mesh.rs`).
 - [ ] Full Milestone 6 verification and multi-node hardware test suite.

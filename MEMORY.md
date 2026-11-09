@@ -25,7 +25,8 @@ Ongoing internal architectural observations, codebase traits, and design prefere
 - Encrypted Storage: SQLCipher with AES-256-GCM encryption (`cipher_page_size=4096`, `kdf_iter=256000`, `foreign_keys=ON`). Schema includes `contacts`, `mappings`, `threads`, `messages`, `attachments`, `key_store`, and `sync_tokens`. Complete design documented in `omnicore-engine/SCHEMA.md`.
 - Dispatcher: Multi-path timeout fallback engine in `omnicore-engine/src/dispatcher.rs` executing concurrent queues and automated protocol fallback.
 - Desktop UI: React 19 + TypeScript + Vite + TailwindCSS running inside Tauri v2 shell with system tray controls.
-- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.8.6).
+- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.8.7).
+- Mesh Relay Bridge Gateway Adapter: `MeshRelayBridgeAdapter` in `omnicore-engine/src/mesh.rs` bridges local P2P mesh packets to external protocol bridges (`MultipathRouter::route_with_cascade`), allowing offline mesh nodes to egress packets to internet/cellular networks via gateway nodes.
 - Cross-Protocol Recipient Translation: `CrossProtocolAddressBook` and `MultipathRouter::route_unified_message` in `omnicore-engine/src/router.rs` translate unified contact identifiers to protocol-specific destination addresses at each cascade step.
 - Penalty-Weighted Route Selection: `MultipathRouter::route_with_penalty_weighted_cascade` and `ProtocolMetric::calculate_route_penalty_score` in `omnicore-engine/src/router.rs` dynamically compute combined latency and failure penalties to deprioritize degraded bridges before circuit tripping.
 - High-Throughput Batch Event Broadcast: `FederationManager::broadcast_batch_events_via_router` in `omnicore-engine/src/federation.rs` bounds outbound concurrency chunks to mitigate rate-limiting and buffer bloat under heavy loads.

@@ -1,6 +1,10 @@
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use crate::discovery::MeshTransportType;
+use crate::dispatcher::MessagePayload;
+use crate::models::{DeliveryState, ProtocolKind};
+use crate::router::MultipathRouter;
 
 /// Outcome of processing an incoming mesh packet at this node.
 #[derive(Debug, PartialEq, Eq)]
@@ -230,6 +234,46 @@ impl MeshTransportDaemon {
     }
 }
 
+/// Adapter bridging store-and-forward mesh routing with external protocol bridges via MultipathRouter.
+/// Enables offline local mesh nodes (e.g. over Bluetooth LE or Wi-Fi Direct) to egress messages
+/// through gateway nodes equipped with active internet protocol bridges (Signal, Matrix, SMS).
+pub struct MeshRelayBridgeAdapter {
+    gateway_node_id: String,
+}
+
+impl MeshRelayBridgeAdapter {
+    pub fn new(gateway_node_id: impl Into<String>) -> Self {
+        Self {
+            gateway_node_id: gateway_node_id.into(),
+        }
+    }
+
+    pub fn gateway_node_id(&self) -> &str {
+        &self.gateway_node_id
+    }
+
+    /// Translates an incoming or queued mesh packet into a MessagePayload and dispatches it
+    /// through MultipathRouter with cascading fallback across external bridges.
+    pub async fn forward_mesh_packet_to_external_bridge(
+        &self,
+        packet: &MeshPacket,
+        router: &MultipathRouter,
+        primary_proto: ProtocolKind,
+        fallbacks: &[ProtocolKind],
+    ) -> Result<(ProtocolKind, DeliveryState)> {
+        let content_str = String::from_utf8(packet.payload.clone())
+            .map_err(|e| anyhow!("Invalid UTF-8 payload in mesh packet: {}", e))?;
+
+        let payload = MessagePayload {
+            recipient_id: packet.header.destination_unified_id.clone(),
+            content: format!("[MeshGateway:{}] {}", self.gateway_node_id, content_str),
+            fallback_protocol: fallbacks.first().map(|p| p.as_str().to_string()).unwrap_or_default(),
+        };
+
+        router.route_with_cascade(&payload, primary_proto, fallbacks).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -380,5 +424,63 @@ mod tests {
         assert_eq!(fwd_packet.header.packet_id, "pkt_fwd_01");
         assert_eq!(fwd_packet.header.hop_limit, 3);
         assert_eq!(matching_channels, 1); // Only 1 BLE channel matches
+    }
+
+    #[tokio::test]
+    async fn test_mesh_relay_bridge_adapter_cascade_to_sms() {
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+        use crate::bridge::ProtocolBridge;
+        use crate::bridges::signal::SignalBridge;
+        use crate::bridges::sms::SmsBridge;
+        use crate::router::BridgeRegistry;
+
+        let mut registry = BridgeRegistry::new();
+
+        // 1. Signal bridge: uninitialized (fails dispatch)
+        let signal = SignalBridge::new();
+        registry.register(ProtocolKind::Signal, Box::new(signal));
+
+        // 2. Cellular SMS bridge: initialized (succeeds)
+        let mut sms = SmsBridge::new();
+        let _ = <SmsBridge as ProtocolBridge>::initialize(&mut sms).await;
+        registry.register(ProtocolKind::Sms, Box::new(sms));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+
+        // Create MeshRelayBridgeAdapter representing a local gateway node
+        let adapter = MeshRelayBridgeAdapter::new("gateway_node_alpha");
+        assert_eq!(adapter.gateway_node_id(), "gateway_node_alpha");
+
+        // Packet originated from an offline P2P node over BLE Mesh
+        let packet = MeshPacket::new(
+            "pkt_offline_001",
+            "offline_p2p_node",
+            "+15559876543",
+            3,
+            MeshTransportType::BleMesh,
+            b"Emergency offline alert via mesh gateway".to_vec(),
+            1700000000,
+        );
+
+        // Gateway forwards mesh packet to external bridges with fallback to SMS
+        let (chosen, state) = adapter
+            .forward_mesh_packet_to_external_bridge(
+                &packet,
+                &router,
+                ProtocolKind::Signal,
+                &[ProtocolKind::Sms],
+            )
+            .await
+            .expect("Mesh packet should successfully forward through SMS fallback");
+
+        assert_eq!(chosen, ProtocolKind::Sms);
+        match state {
+            DeliveryState::FallbackTriggered { from, to, .. } => {
+                assert_eq!(from, ProtocolKind::Signal);
+                assert_eq!(to, ProtocolKind::Sms);
+            }
+            _ => panic!("Expected FallbackTriggered state"),
+        }
     }
 }
