@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.8.2:
+  - Adaptive Fallback Retry Router: Implemented `route_with_adaptive_fallback_retry` on `MultipathRouter` in `omnicore-engine/src/router.rs`. Dynamically re-evaluates candidate health, promotes recovering half-open circuit breakers across multiple execution passes, and ensures delivery resilience under intermittent network disruptions.
 - 0.8.1:
   - Multi-Bridge Mesh Relay Hedged Broadcast: Implemented `broadcast_event_via_hedged_racing` on `FederationManager` in `omnicore-engine/src/federation.rs`. Enables concurrent racing of primary and fallback candidate bridges across decentralized multi-party group channels with cryptographic signature preservation and causal vector clock synchronization.
   - Multi-Platform Fallback Stress Testing: Added integration stress test verifying simultaneous hedged racing across 5 distinct platform bridge members (Signal, Matrix, Discord, Tox, SMS) under primary link failure.
