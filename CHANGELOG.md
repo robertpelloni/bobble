@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.8.6:
+  - Cross-Protocol Recipient Translation & Unified Routing: Implemented `CrossProtocolAddressBook` and `route_unified_message` in `omnicore-engine/src/router.rs`. Automatically translates high-level unified contact identities to protocol-native destination addresses (Signal E.164, Matrix user ID, Discord channel ID, SMS number) at each fallback stage of a cascading dispatch.
 - 0.8.5:
   - Penalty-Weighted Route Selection & Cascade: Implemented `calculate_route_penalty_score` on `ProtocolMetric` and `select_penalty_weighted_route` on `BridgeRegistry` in `omnicore-engine/src/router.rs`. Computes unified degradation scores combining EWMA latency, failure multipliers, and tripping counts to proactively deprioritize degraded bridges prior to open circuit failure. Added `route_with_penalty_weighted_cascade` on `MultipathRouter`.
 - 0.8.4:

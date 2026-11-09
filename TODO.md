@@ -64,3 +64,4 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Implement flapping network resilience with exponential circuit cooldown backoff in `omnicore-engine/src/router.rs`.
 - [x] Implement federated batch broadcast with concurrency rate limiting under heavy load in `omnicore-engine/src/federation.rs`.
 - [x] Implement penalty-weighted route prioritization and degradation cascade in `omnicore-engine/src/router.rs`.
+- [x] Implement cross-protocol dynamic address translation and unified message routing in `omnicore-engine/src/router.rs`.

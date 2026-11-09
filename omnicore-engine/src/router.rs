@@ -6,6 +6,37 @@ use crate::bridge::ProtocolBridge;
 use crate::dispatcher::MessagePayload;
 use crate::models::{DeliveryState, ProtocolKind};
 
+/// Address book translating a unified contact identity into protocol-specific destination identifiers.
+#[derive(Debug, Clone, Default)]
+pub struct CrossProtocolAddressBook {
+    mappings: HashMap<String, HashMap<ProtocolKind, String>>,
+}
+
+impl CrossProtocolAddressBook {
+    pub fn new() -> Self {
+        Self {
+            mappings: HashMap::new(),
+        }
+    }
+
+    /// Registers a protocol-specific recipient address for a unified contact identifier.
+    pub fn register_address(&mut self, unified_id: &str, protocol: ProtocolKind, address: &str) {
+        self.mappings
+            .entry(unified_id.to_string())
+            .or_default()
+            .insert(protocol, address.to_string());
+    }
+
+    /// Resolves the protocol address for a given unified contact; if unmapped, defaults to unified_id.
+    pub fn resolve_address(&self, unified_id: &str, protocol: ProtocolKind) -> String {
+        self.mappings
+            .get(unified_id)
+            .and_then(|protos| protos.get(&protocol))
+            .cloned()
+            .unwrap_or_else(|| unified_id.to_string())
+    }
+}
+
 /// Guard ensuring message payload integrity and tamper detection across multi-protocol cascading fallbacks.
 pub struct PayloadIntegrityGuard;
 
@@ -1001,6 +1032,93 @@ impl MultipathRouter {
             payload.recipient_id
         ))
     }
+
+    /// Dispatches a message directed to a unified contact identity across primary and fallback
+    /// protocols, automatically translating recipient destination identifiers via CrossProtocolAddressBook
+    /// at each step of the cascade.
+    pub async fn route_unified_message(
+        &self,
+        unified_id: &str,
+        content: &str,
+        primary: ProtocolKind,
+        fallbacks: &[ProtocolKind],
+        address_book: &CrossProtocolAddressBook,
+        now_epoch: u64,
+    ) -> Result<(ProtocolKind, DeliveryState)> {
+        let (chosen_primary, reordered_fallbacks) = {
+            let registry_guard = self.registry.read().await;
+            registry_guard.select_optimal_route(primary, fallbacks)
+        };
+
+        let mut candidate_chain = vec![chosen_primary];
+        candidate_chain.extend(reordered_fallbacks);
+
+        for (idx, &candidate) in candidate_chain.iter().enumerate() {
+            let is_available = {
+                let mut registry_guard = self.registry.write().await;
+                if let Some(metric) = registry_guard.metrics.get_mut(&candidate) {
+                    metric.is_available_at(now_epoch)
+                } else {
+                    true
+                }
+            };
+
+            if !is_available {
+                continue;
+            }
+
+            let bridge_opt = {
+                let registry_guard = self.registry.read().await;
+                registry_guard.get(candidate)
+            };
+
+            if let Some(bridge_ref) = bridge_opt {
+                let bridge = bridge_ref.read().await;
+                // Resolve recipient address for the specific bridge candidate
+                let resolved_recipient = address_book.resolve_address(unified_id, candidate);
+                let payload = MessagePayload {
+                    recipient_id: resolved_recipient,
+                    content: content.to_string(),
+                    fallback_protocol: candidate_chain.get(idx + 1).map(|p| p.as_str().to_string()).unwrap_or_default(),
+                };
+
+                let start = std::time::Instant::now();
+                match bridge.send_message(&payload).await {
+                    Ok(_) => {
+                        let latency_ms = start.elapsed().as_millis() as u64;
+                        let mut registry_guard = self.registry.write().await;
+                        registry_guard.record_delivery_metrics(candidate, latency_ms, true, now_epoch);
+
+                        let state = if idx == 0 && candidate == primary {
+                            DeliveryState::Delivered
+                        } else {
+                            DeliveryState::FallbackTriggered {
+                                from: primary,
+                                to: candidate,
+                                reason: format!("Unified identity [{}] translated and routed via [{}]", unified_id, candidate.as_str()),
+                            }
+                        };
+                        return Ok((candidate, state));
+                    }
+                    Err(e) => {
+                        let latency_ms = start.elapsed().as_millis() as u64;
+                        let mut registry_guard = self.registry.write().await;
+                        registry_guard.record_delivery_metrics(candidate, latency_ms, false, now_epoch);
+                        eprintln!(
+                            "Unified route bridge [{}] failed: {}. Continuing cascade...",
+                            candidate.as_str(),
+                            e
+                        );
+                    }
+                }
+            }
+        }
+
+        Err(anyhow!(
+            "Unified routing failed: all candidates exhausted for contact {}",
+            unified_id
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -1814,6 +1932,62 @@ mod tests {
             DeliveryState::FallbackTriggered { from, to, .. } => {
                 assert_eq!(from, ProtocolKind::Signal);
                 assert_eq!(to, ProtocolKind::Matrix);
+            }
+            _ => panic!("Expected FallbackTriggered state"),
+        }
+    }
+
+    #[test]
+    fn test_cross_protocol_address_book_translation() {
+        let mut book = CrossProtocolAddressBook::new();
+        book.register_address("alice_unified", ProtocolKind::Signal, "+15551234567");
+        book.register_address("alice_unified", ProtocolKind::Matrix, "@alice:matrix.org");
+        book.register_address("alice_unified", ProtocolKind::Discord, "discord_channel_999");
+
+        assert_eq!(book.resolve_address("alice_unified", ProtocolKind::Signal), "+15551234567");
+        assert_eq!(book.resolve_address("alice_unified", ProtocolKind::Matrix), "@alice:matrix.org");
+        assert_eq!(book.resolve_address("alice_unified", ProtocolKind::Discord), "discord_channel_999");
+        // Unmapped protocol falls back to unified_id
+        assert_eq!(book.resolve_address("alice_unified", ProtocolKind::Sms), "alice_unified");
+    }
+
+    #[tokio::test]
+    async fn test_route_unified_message_with_dynamic_translation_fallback() {
+        let mut registry = BridgeRegistry::new();
+
+        // 1. Primary: Signal bridge (uninitialized, fails)
+        let signal = SignalBridge::new();
+        registry.register(ProtocolKind::Signal, Box::new(signal));
+
+        // 2. Secondary fallback: Matrix bridge (initialized, succeeds)
+        let mut matrix = MatrixBridge::new();
+        matrix.initialize().await.unwrap();
+        registry.register(ProtocolKind::Matrix, Box::new(matrix));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+
+        let mut book = CrossProtocolAddressBook::new();
+        book.register_address("user_bob_unified", ProtocolKind::Signal, "+15550011223");
+        book.register_address("user_bob_unified", ProtocolKind::Matrix, "!matrix_room_bob:matrix.org");
+
+        let (chosen, state) = router
+            .route_unified_message(
+                "user_bob_unified",
+                "Hello across unified identity boundaries",
+                ProtocolKind::Signal,
+                &[ProtocolKind::Matrix],
+                &book,
+                1700000000,
+            )
+            .await
+            .expect("Unified message routing should cascade to Matrix and succeed");
+
+        assert_eq!(chosen, ProtocolKind::Matrix);
+        match state {
+            DeliveryState::FallbackTriggered { from, to, reason } => {
+                assert_eq!(from, ProtocolKind::Signal);
+                assert_eq!(to, ProtocolKind::Matrix);
+                assert!(reason.contains("user_bob_unified"));
             }
             _ => panic!("Expected FallbackTriggered state"),
         }
