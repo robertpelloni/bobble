@@ -661,6 +661,18 @@ impl ProtocolMetric {
         }
     }
 
+    /// Decays consecutive trip counts and backoff penalties if the bridge has maintained stable
+    /// Closed state without failures for at least `stability_window_sec`.
+    pub fn decay_trips_if_stable(&mut self, now_epoch: u64, stability_window_sec: u64) -> bool {
+        if self.circuit_state == CircuitState::Closed && self.consecutive_trips > 0 {
+            if now_epoch >= self.last_failure_epoch_sec.saturating_add(stability_window_sec) {
+                self.consecutive_trips = self.consecutive_trips.saturating_sub(1);
+                return true;
+            }
+        }
+        false
+    }
+
     /// Sets dynamic jitter in seconds to stagger recovery of flapping bridges.
     pub fn with_jitter(mut self, jitter_sec: u64) -> Self {
         self.cooldown_jitter_sec = jitter_sec;
@@ -2271,6 +2283,33 @@ impl MultipathRouter {
             payload.recipient_id
         ))
     }
+
+    /// Automatically decays consecutive trip counts across all candidate bridges that have exhibited
+    /// uninterrupted stability during the `stability_window_sec`, gradually rehabilitating their priority tiers.
+    pub async fn rehabilitate_stable_circuits(&self, now_epoch: u64, stability_window_sec: u64) -> usize {
+        let mut reg = self.registry.write().await;
+        let mut decayed_count = 0;
+        for metric in reg.metrics.values_mut() {
+            if metric.decay_trips_if_stable(now_epoch, stability_window_sec) {
+                decayed_count += 1;
+            }
+        }
+        decayed_count
+    }
+
+    /// Dispatches with automated circuit rehabilitation: decays backoff penalties on bridges that
+    /// have remained stable, before performing optimal cascading delivery.
+    pub async fn route_with_rehabilitated_circuits(
+        &self,
+        payload: &MessagePayload,
+        primary: ProtocolKind,
+        fallbacks: &[ProtocolKind],
+        stability_window_sec: u64,
+        now_epoch: u64,
+    ) -> Result<(ProtocolKind, DeliveryState)> {
+        let _ = self.rehabilitate_stable_circuits(now_epoch, stability_window_sec).await;
+        self.route_with_optimal_cascade(payload, primary, fallbacks, now_epoch).await
+    }
 }
 
 #[cfg(test)]
@@ -3784,5 +3823,78 @@ mod tests {
             }
             _ => panic!("Expected FallbackTriggered state"),
         }
+    }
+
+    #[test]
+    fn test_protocol_metric_decay_trips_if_stable() {
+        let mut metric = ProtocolMetric {
+            consecutive_trips: 3,
+            circuit_state: CircuitState::Closed,
+            last_failure_epoch_sec: 1000,
+            ..Default::default()
+        };
+
+        // Stability window is 60s
+        // At 1050 (50s elapsed), stability window not met -> no decay
+        assert!(!metric.decay_trips_if_stable(1050, 60));
+        assert_eq!(metric.consecutive_trips, 3);
+
+        // At 1065 (65s elapsed), stability window met -> trips decay by 1
+        assert!(metric.decay_trips_if_stable(1065, 60));
+        assert_eq!(metric.consecutive_trips, 2);
+
+        // Subsequent call at 1070 -> decays further
+        assert!(metric.decay_trips_if_stable(1070, 60));
+        assert_eq!(metric.consecutive_trips, 1);
+    }
+
+    #[tokio::test]
+    async fn test_rehabilitate_stable_circuits_and_route() {
+        let mut registry = BridgeRegistry::new();
+
+        let mut signal = SignalBridge::new();
+        signal.initialize().await.unwrap();
+        registry.register(ProtocolKind::Signal, Box::new(signal));
+
+        let now = 1700000000;
+        // Simulate previous flapping history: 2 consecutive trips, but currently Closed
+        {
+            let m = registry.metrics.get_mut(&ProtocolKind::Signal).unwrap();
+            m.consecutive_trips = 2;
+            m.circuit_state = CircuitState::Closed;
+            m.last_failure_epoch_sec = now;
+        }
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+
+        // At now + 120s (with stability window 60s), trips are decayed
+        let decayed = router.rehabilitate_stable_circuits(now + 120, 60).await;
+        assert_eq!(decayed, 1);
+
+        {
+            let reg_guard = router.registry.read().await;
+            let m = reg_guard.get_metrics(ProtocolKind::Signal).unwrap();
+            assert_eq!(m.consecutive_trips, 1); // Decayed from 2 to 1
+        }
+
+        let payload = MessagePayload {
+            recipient_id: "+15551357".to_string(),
+            content: "Testing route with rehabilitated circuit".to_string(),
+            fallback_protocol: "none".to_string(),
+        };
+
+        let (chosen, state) = router
+            .route_with_rehabilitated_circuits(
+                &payload,
+                ProtocolKind::Signal,
+                &[],
+                60,
+                now + 130,
+            )
+            .await
+            .expect("Rehabilitated circuit dispatch should succeed");
+
+        assert_eq!(chosen, ProtocolKind::Signal);
+        assert_eq!(state, DeliveryState::Delivered);
     }
 }

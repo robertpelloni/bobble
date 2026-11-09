@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.9.9:
+  - Circuit Auto-Reset & Backoff Decay Engine: Implemented `decay_trips_if_stable`, `rehabilitate_stable_circuits`, and `route_with_rehabilitated_circuits` in `omnicore-engine/src/router.rs`. Gradually decrements historical flapping trip counts and effective cooldown penalties for candidate bridges that maintain uninterrupted stability during configured observation windows, rehabilitating degraded transports without manual intervention.
 - 0.9.8:
   - Sliding-Window Bandwidth Quota & Traffic Shaper: Implemented `RouteBandwidthShaper` and `MultipathRouter::route_with_bandwidth_throttled_cascade` in `omnicore-engine/src/router.rs`. Monitors per-transport byte consumption over sliding time windows (60s default) and prevents overages on metered channels (cellular SMS 2KB budget) by automatically triggering graceful fallback to unmetered bridges (Matrix, Signal).
 - 0.9.7:
