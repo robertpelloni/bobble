@@ -37,6 +37,46 @@ impl CrossProtocolAddressBook {
     }
 }
 
+/// Protocol-specific payload size constraints for transport adaptation.
+pub struct ProtocolMtuLimits;
+
+impl ProtocolMtuLimits {
+    /// Returns max payload character/byte limit for a given protocol transport.
+    pub fn max_payload_len(protocol: ProtocolKind) -> usize {
+        match protocol {
+            ProtocolKind::Sms => 140, // Single SMS segment safe character budget
+            ProtocolKind::Tox => 1372, // P2P UDP packet limit
+            _ => 65536, // Unconstrained high-MTU bridges (Signal, Matrix, Discord, SimpleX, iMessage)
+        }
+    }
+}
+
+/// Message payload fragmenter splitting oversized messages into sequential chunks.
+pub struct PayloadFragmenter;
+
+impl PayloadFragmenter {
+    /// Splits payload content into chunks conforming to MTU constraints.
+    pub fn fragment_payload(content: &str, max_len: usize) -> Vec<String> {
+        let max_len = max_len.max(20);
+        if content.len() <= max_len {
+            return vec![content.to_string()];
+        }
+
+        // Account for prefix header: "[1/N] " (approx 8 chars)
+        let chunk_size = max_len.saturating_sub(10).max(10);
+        let chars: Vec<char> = content.chars().collect();
+        let total_chunks = (chars.len() + chunk_size - 1) / chunk_size;
+
+        let mut fragments = Vec::new();
+        for (idx, chunk) in chars.chunks(chunk_size).enumerate() {
+            let part_str: String = chunk.iter().collect();
+            fragments.push(format!("[{}/{}] {}", idx + 1, total_chunks, part_str));
+        }
+
+        fragments
+    }
+}
+
 /// Guard ensuring message payload integrity and tamper detection across multi-protocol cascading fallbacks.
 pub struct PayloadIntegrityGuard;
 
@@ -1119,6 +1159,100 @@ impl MultipathRouter {
             unified_id
         ))
     }
+
+    /// Dispatches a message across cascading protocols with dynamic MTU fragmentation.
+    /// If candidate bridge requires fragmentation (e.g. SMS limit 140 chars), payload is
+    /// fragmented into ordered chunks and sequentially transmitted.
+    pub async fn route_with_fragmentation_adaptive_cascade(
+        &self,
+        payload: &MessagePayload,
+        primary: ProtocolKind,
+        fallbacks: &[ProtocolKind],
+        now_epoch: u64,
+    ) -> Result<(ProtocolKind, DeliveryState, usize)> {
+        let (chosen_primary, reordered_fallbacks) = {
+            let registry_guard = self.registry.read().await;
+            registry_guard.select_optimal_route(primary, fallbacks)
+        };
+
+        let mut candidate_chain = vec![chosen_primary];
+        candidate_chain.extend(reordered_fallbacks);
+
+        for (idx, &candidate) in candidate_chain.iter().enumerate() {
+            let is_available = {
+                let mut registry_guard = self.registry.write().await;
+                if let Some(metric) = registry_guard.metrics.get_mut(&candidate) {
+                    metric.is_available_at(now_epoch)
+                } else {
+                    true
+                }
+            };
+
+            if !is_available {
+                continue;
+            }
+
+            let bridge_opt = {
+                let registry_guard = self.registry.read().await;
+                registry_guard.get(candidate)
+            };
+
+            if let Some(bridge_ref) = bridge_opt {
+                let bridge = bridge_ref.read().await;
+                let mtu = ProtocolMtuLimits::max_payload_len(candidate);
+                let fragments = PayloadFragmenter::fragment_payload(&payload.content, mtu);
+                let frag_count = fragments.len();
+
+                let mut all_fragments_sent = true;
+                let start = std::time::Instant::now();
+
+                for fragment in &fragments {
+                    let frag_payload = MessagePayload {
+                        recipient_id: payload.recipient_id.clone(),
+                        content: fragment.clone(),
+                        fallback_protocol: candidate_chain.get(idx + 1).map(|p| p.as_str().to_string()).unwrap_or_default(),
+                    };
+
+                    if let Err(e) = bridge.send_message(&frag_payload).await {
+                        eprintln!(
+                            "Candidate bridge [{}] failed fragment dispatch: {}. Cascading...",
+                            candidate.as_str(),
+                            e
+                        );
+                        all_fragments_sent = false;
+                        break;
+                    }
+                }
+
+                let latency_ms = start.elapsed().as_millis() as u64;
+                let mut registry_guard = self.registry.write().await;
+                registry_guard.record_delivery_metrics(candidate, latency_ms, all_fragments_sent, now_epoch);
+
+                if all_fragments_sent {
+                    let state = if idx == 0 && candidate == primary {
+                        DeliveryState::Delivered
+                    } else {
+                        DeliveryState::FallbackTriggered {
+                            from: primary,
+                            to: candidate,
+                            reason: format!(
+                                "Delivered via [{}] (fragmented into {} parts, MTU: {})",
+                                candidate.as_str(),
+                                frag_count,
+                                mtu
+                            ),
+                        }
+                    };
+                    return Ok((candidate, state, frag_count));
+                }
+            }
+        }
+
+        Err(anyhow!(
+            "MTU-adaptive cascade failed: all candidate protocols exhausted for recipient {}",
+            payload.recipient_id
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -1988,6 +2122,62 @@ mod tests {
                 assert_eq!(from, ProtocolKind::Signal);
                 assert_eq!(to, ProtocolKind::Matrix);
                 assert!(reason.contains("user_bob_unified"));
+            }
+            _ => panic!("Expected FallbackTriggered state"),
+        }
+    }
+
+    #[test]
+    fn test_payload_fragmenter_splits_oversized_content() {
+        let text = "This is a long test payload exceeding the small MTU limit of 50 characters to test fragmentation header formatting.";
+        let fragments = PayloadFragmenter::fragment_payload(text, 50);
+
+        assert!(fragments.len() > 1);
+        for (i, frag) in fragments.iter().enumerate() {
+            assert!(frag.starts_with(&format!("[{}/", i + 1)));
+            assert!(frag.len() <= 60); // bounded by MTU
+        }
+    }
+
+    #[tokio::test]
+    async fn test_route_with_fragmentation_adaptive_cascade_to_sms() {
+        let mut registry = BridgeRegistry::new();
+
+        // 1. Signal bridge: uninitialized (fails)
+        let signal = SignalBridge::new();
+        registry.register(ProtocolKind::Signal, Box::new(signal));
+
+        // 2. Cellular SMS bridge: initialized (succeeds)
+        let mut sms = SmsBridge::new();
+        let _ = <SmsBridge as ProtocolBridge>::initialize(&mut sms).await;
+        registry.register(ProtocolKind::Sms, Box::new(sms));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+
+        let long_content = "A".repeat(350); // 350 chars exceeds SMS 140 char MTU limit
+        let payload = MessagePayload {
+            recipient_id: "+15554321".to_string(),
+            content: long_content,
+            fallback_protocol: "SMS".to_string(),
+        };
+
+        let (chosen, state, fragment_count) = router
+            .route_with_fragmentation_adaptive_cascade(
+                &payload,
+                ProtocolKind::Signal,
+                &[ProtocolKind::Sms],
+                1700000000,
+            )
+            .await
+            .expect("Fragmentation adaptive cascade to SMS should succeed");
+
+        assert_eq!(chosen, ProtocolKind::Sms);
+        assert!(fragment_count >= 3); // 350 / 130 ~ 3 chunks
+        match state {
+            DeliveryState::FallbackTriggered { from, to, reason } => {
+                assert_eq!(from, ProtocolKind::Signal);
+                assert_eq!(to, ProtocolKind::Sms);
+                assert!(reason.contains("fragmented"));
             }
             _ => panic!("Expected FallbackTriggered state"),
         }

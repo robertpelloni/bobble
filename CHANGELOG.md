@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.8.8:
+  - Cross-Protocol Packet Fragmentation & MTU Adaptor: Implemented `ProtocolMtuLimits`, `PayloadFragmenter`, and `route_with_fragmentation_adaptive_cascade` in `omnicore-engine/src/router.rs`. Automatically splits oversized message payloads into sequence-numbered, checksum-validated chunks when cascading to constrained transports (such as Cellular SMS with 140-char MTU or Tox P2P MTU constraints), tracking multi-part delivery states.
 - 0.8.7:
   - Mesh Relay Bridge Gateway Adapter: Implemented `MeshRelayBridgeAdapter` in `omnicore-engine/src/mesh.rs`. Connects local P2P store-and-forward mesh topologies (BLE Mesh, Wi-Fi Direct) with external internet protocol bridges via `MultipathRouter::route_with_cascade`, allowing partitioned or offline mesh nodes to seamlessly egress messages through gateway nodes to internet and cellular networks.
 - 0.8.6:

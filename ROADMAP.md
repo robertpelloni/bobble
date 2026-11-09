@@ -73,4 +73,5 @@ Major, long-term structural milestones and structural plans.
 - [x] Penalty-weighted route selection and proactive degradation avoidance (`route_with_penalty_weighted_cascade` in `router.rs`).
 - [x] Cross-protocol address book translation and unified contact routing (`route_unified_message` in `router.rs`).
 - [x] Store-and-forward mesh relay bridge gateway adapter (`MeshRelayBridgeAdapter` in `mesh.rs`).
+- [x] Dynamic cross-protocol packet fragmentation and MTU adaptation (`route_with_fragmentation_adaptive_cascade` in `router.rs`).
 - [ ] Full Milestone 6 verification and multi-node hardware test suite.
