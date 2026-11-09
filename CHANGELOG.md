@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 0.8.3:
+  - Flapping Network Resilience & Exponential Cooldown Backoff: Implemented `consecutive_trips` tracking and `compute_effective_cooldown` on `ProtocolMetric` in `omnicore-engine/src/router.rs`, introducing exponential backoff with dynamic jitter to circuit-breaker cooldown periods under repeated network disconnects. Added `route_with_flapping_resilience` on `MultipathRouter` to bypass unstable flapping candidate bridges in favor of reliable low-tier fallbacks (e.g., cellular SMS).
 - 0.8.2:
   - Adaptive Fallback Retry Router: Implemented `route_with_adaptive_fallback_retry` on `MultipathRouter` in `omnicore-engine/src/router.rs`. Dynamically re-evaluates candidate health, promotes recovering half-open circuit breakers across multiple execution passes, and ensures delivery resilience under intermittent network disruptions.
 - 0.8.1:

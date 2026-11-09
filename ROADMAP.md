@@ -68,4 +68,5 @@ Major, long-term structural milestones and structural plans.
 - [x] Hedged multi-path racing router (`route_hedged_racing`) with tail-latency hedging cutoff and circuit breaker dynamic cooldown jitter (`router.rs`).
 - [x] Multi-bridge mesh relay hedged broadcast across federated multi-platform channels (`broadcast_event_via_hedged_racing` in `federation.rs`).
 - [x] Adaptive multi-pass fallback retry router (`route_with_adaptive_fallback_retry` in `router.rs`).
+- [x] Flapping network resilience with exponential circuit cooldown backoff (`route_with_flapping_resilience` in `router.rs`).
 - [ ] Full Milestone 6 verification and multi-node hardware test suite.

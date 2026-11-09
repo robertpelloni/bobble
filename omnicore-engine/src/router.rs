@@ -104,6 +104,8 @@ pub struct ProtocolMetric {
     pub failure_threshold: u32,
     pub cooldown_sec: u64,
     pub cooldown_jitter_sec: u64,
+    pub consecutive_trips: u32,
+    pub max_cooldown_sec: u64,
 }
 
 impl Default for ProtocolMetric {
@@ -118,17 +120,26 @@ impl Default for ProtocolMetric {
             failure_threshold: 3,
             cooldown_sec: 30,
             cooldown_jitter_sec: 0,
+            consecutive_trips: 0,
+            max_cooldown_sec: 300,
         }
     }
 }
 
 impl ProtocolMetric {
-    /// Checks availability, computing effective cooldown with dynamic jitter to avoid thundering herd.
+    /// Computes effective cooldown incorporating exponential backoff for flapping bridges and dynamic jitter.
+    pub fn compute_effective_cooldown(&self) -> u64 {
+        let multiplier = 1u64.checked_shl(self.consecutive_trips.min(5)).unwrap_or(32);
+        let backoff_cooldown = (self.cooldown_sec.saturating_mul(multiplier)).min(self.max_cooldown_sec);
+        backoff_cooldown.saturating_add(self.cooldown_jitter_sec)
+    }
+
+    /// Checks availability, computing effective cooldown with dynamic jitter and exponential backoff to avoid thundering herd.
     pub fn is_available_at(&mut self, now_epoch: u64) -> bool {
         match self.circuit_state {
             CircuitState::Closed => true,
             CircuitState::Open => {
-                let effective_cooldown = self.cooldown_sec.saturating_add(self.cooldown_jitter_sec);
+                let effective_cooldown = self.compute_effective_cooldown();
                 if now_epoch >= self.last_failure_epoch_sec.saturating_add(effective_cooldown) {
                     self.circuit_state = CircuitState::HalfOpen;
                     true
@@ -143,6 +154,12 @@ impl ProtocolMetric {
     /// Sets dynamic jitter in seconds to stagger recovery of flapping bridges.
     pub fn with_jitter(mut self, jitter_sec: u64) -> Self {
         self.cooldown_jitter_sec = jitter_sec;
+        self
+    }
+
+    /// Configures exponential backoff parameters.
+    pub fn with_backoff_limits(mut self, max_cooldown_sec: u64) -> Self {
+        self.max_cooldown_sec = max_cooldown_sec;
         self
     }
 }
@@ -213,6 +230,9 @@ impl BridgeRegistry {
             m.consecutive_failures += 1;
             m.last_failure_epoch_sec = now_epoch;
             if m.consecutive_failures >= m.failure_threshold {
+                if m.circuit_state != CircuitState::Open {
+                    m.consecutive_trips = m.consecutive_trips.saturating_add(1);
+                }
                 m.circuit_state = CircuitState::Open;
             }
         }
@@ -805,6 +825,65 @@ impl MultipathRouter {
             max_passes,
             last_err
         ))
+    }
+
+    /// Dispatches with flapping network resilience: prioritizes candidates with lower consecutive circuit
+    /// trips and low failure counts, falling back gracefully to reliable low-tier bridges (e.g. SMS)
+    /// during severe multi-bridge network flap events.
+    pub async fn route_with_flapping_resilience(
+        &self,
+        payload: &MessagePayload,
+        requested_primary: ProtocolKind,
+        fallbacks: &[ProtocolKind],
+        now_epoch: u64,
+    ) -> Result<(ProtocolKind, DeliveryState)> {
+        // Collect candidate chain sorted by health, but heavily penalizing flapping candidates
+        let mut candidates = vec![requested_primary];
+        for &fb in fallbacks {
+            if !candidates.contains(&fb) {
+                candidates.push(fb);
+            }
+        }
+
+        {
+            let registry_guard = self.registry.read().await;
+            candidates.sort_by(|a, b| {
+                let m_a = registry_guard.metrics.get(a);
+                let m_b = registry_guard.metrics.get(b);
+
+                let trips_a = m_a.map(|m| m.consecutive_trips).unwrap_or(0);
+                let trips_b = m_b.map(|m| m.consecutive_trips).unwrap_or(0);
+
+                if trips_a != trips_b {
+                    trips_a.cmp(&trips_b)
+                } else {
+                    let fail_a = m_a.map(|m| m.consecutive_failures).unwrap_or(0);
+                    let fail_b = m_b.map(|m| m.consecutive_failures).unwrap_or(0);
+                    fail_a.cmp(&fail_b)
+                }
+            });
+        }
+
+        let non_flapping_primary = candidates[0];
+        let non_flapping_fallbacks = candidates[1..].to_vec();
+
+        let (chosen, mut state) = self.route_with_optimal_cascade(
+            payload,
+            non_flapping_primary,
+            &non_flapping_fallbacks,
+            now_epoch,
+        ).await?;
+
+        // If delivered on a candidate other than requested_primary, map to FallbackTriggered
+        if chosen != requested_primary {
+            state = DeliveryState::FallbackTriggered {
+                from: requested_primary,
+                to: chosen,
+                reason: format!("Flapping resilience bypassed primary [{}] for [{}]", requested_primary.as_str(), chosen.as_str()),
+            };
+        }
+
+        Ok((chosen, state))
     }
 }
 
@@ -1489,6 +1568,78 @@ mod tests {
             DeliveryState::FallbackTriggered { from, to, .. } => {
                 assert_eq!(from, ProtocolKind::Signal);
                 assert_eq!(to, ProtocolKind::Matrix);
+            }
+            _ => panic!("Expected FallbackTriggered state"),
+        }
+    }
+
+    #[test]
+    fn test_circuit_exponential_cooldown_backoff_progression() {
+        let mut metric = ProtocolMetric {
+            cooldown_sec: 20,
+            cooldown_jitter_sec: 5,
+            max_cooldown_sec: 200,
+            ..Default::default()
+        };
+
+        // 0 consecutive trips: 20 * 2^0 + 5 = 25s
+        assert_eq!(metric.compute_effective_cooldown(), 25);
+
+        // 1 trip: 20 * 2^1 + 5 = 45s
+        metric.consecutive_trips = 1;
+        assert_eq!(metric.compute_effective_cooldown(), 45);
+
+        // 2 trips: 20 * 2^2 + 5 = 85s
+        metric.consecutive_trips = 2;
+        assert_eq!(metric.compute_effective_cooldown(), 85);
+
+        // 3 trips: 20 * 2^3 + 5 = 165s
+        metric.consecutive_trips = 3;
+        assert_eq!(metric.compute_effective_cooldown(), 165);
+
+        // 4 trips: clamped by max_cooldown_sec (200) + 5 = 205s
+        metric.consecutive_trips = 4;
+        assert_eq!(metric.compute_effective_cooldown(), 205);
+    }
+
+    #[tokio::test]
+    async fn test_route_with_flapping_resilience_bypasses_flapping_bridge() {
+        let mut registry = BridgeRegistry::new();
+
+        // 1. Signal bridge: repeatedly flaps, has 3 consecutive circuit trips
+        let signal = SignalBridge::new();
+        registry.register(ProtocolKind::Signal, Box::new(signal));
+        let now = 1700000000;
+        for _ in 0..3 {
+            registry.record_delivery_metrics(ProtocolKind::Signal, 10, false, now);
+            registry.record_delivery_metrics(ProtocolKind::Signal, 10, false, now);
+            registry.record_delivery_metrics(ProtocolKind::Signal, 10, false, now);
+        }
+
+        // 2. Cellular SMS bridge: stable, initialized, 0 trips
+        let mut sms = SmsBridge::new();
+        let _ = <SmsBridge as ProtocolBridge>::initialize(&mut sms).await;
+        registry.register(ProtocolKind::Sms, Box::new(sms));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+
+        let payload = MessagePayload {
+            recipient_id: "+15557878".to_string(),
+            content: "Testing flapping bridge resilience".to_string(),
+            fallback_protocol: "SMS".to_string(),
+        };
+
+        // Flapping resilience should prioritize stable SMS bridge over repeatedly tripping Signal
+        let (chosen, state) = router
+            .route_with_flapping_resilience(&payload, ProtocolKind::Signal, &[ProtocolKind::Sms], now + 5)
+            .await
+            .expect("Routing with flapping resilience should deliver via SMS");
+
+        assert_eq!(chosen, ProtocolKind::Sms);
+        match state {
+            DeliveryState::FallbackTriggered { from, to, .. } => {
+                assert_eq!(from, ProtocolKind::Signal);
+                assert_eq!(to, ProtocolKind::Sms);
             }
             _ => panic!("Expected FallbackTriggered state"),
         }

@@ -61,3 +61,4 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Implement hedged multi-path racing router and circuit dynamic cooldown jitter in `omnicore-engine/src/router.rs`.
 - [x] Implement multi-bridge mesh relay hedged broadcast in `omnicore-engine/src/federation.rs` and verify across 5 platforms.
 - [x] Implement adaptive multi-pass fallback retry routing with half-open circuit recovery in `omnicore-engine/src/router.rs`.
+- [x] Implement flapping network resilience with exponential circuit cooldown backoff in `omnicore-engine/src/router.rs`.
