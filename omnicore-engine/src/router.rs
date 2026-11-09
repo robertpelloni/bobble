@@ -162,6 +162,22 @@ impl ProtocolMetric {
         self.max_cooldown_sec = max_cooldown_sec;
         self
     }
+
+    /// Computes a holistic penalty score for route prioritization.
+    /// Lower score = healthier bridge.
+    /// Incorporates EWMA latency, heavy multipliers for consecutive failures, and flapping trips.
+    pub fn calculate_route_penalty_score(&self) -> u64 {
+        let base_lat = if self.average_latency_ms == 0 {
+            50 // Neutral baseline for unattempted bridges
+        } else {
+            self.average_latency_ms
+        };
+
+        let fail_penalty = (self.consecutive_failures as u64).saturating_mul(500);
+        let trip_penalty = (self.consecutive_trips as u64).saturating_mul(2000);
+
+        base_lat.saturating_add(fail_penalty).saturating_add(trip_penalty)
+    }
 }
 
 /// Configuration policy for hedged racing dispatch across candidate bridges.
@@ -275,6 +291,30 @@ impl BridgeRegistry {
         let chosen_primary = candidates[0];
         let remaining_fallbacks = candidates[1..].to_vec();
         (chosen_primary, remaining_fallbacks)
+    }
+
+    /// Selects candidate ordering based on holistic penalty scores (latency + failure + trip penalties).
+    pub fn select_penalty_weighted_route(
+        &self,
+        primary: ProtocolKind,
+        fallbacks: &[ProtocolKind],
+    ) -> (ProtocolKind, Vec<ProtocolKind>) {
+        let mut candidates = vec![primary];
+        for &fb in fallbacks {
+            if !candidates.contains(&fb) {
+                candidates.push(fb);
+            }
+        }
+
+        candidates.sort_by(|a, b| {
+            let score_a = self.metrics.get(a).map(|m| m.calculate_route_penalty_score()).unwrap_or(50);
+            let score_b = self.metrics.get(b).map(|m| m.calculate_route_penalty_score()).unwrap_or(50);
+            score_a.cmp(&score_b)
+        });
+
+        let chosen = candidates[0];
+        let remaining = candidates[1..].to_vec();
+        (chosen, remaining)
     }
 
     /// Selects optimal route while actively promoting starved (zero-attempt) candidates
@@ -884,6 +924,82 @@ impl MultipathRouter {
         }
 
         Ok((chosen, state))
+    }
+
+    /// Dispatches using penalty-weighted candidate ordering, deprioritizing bridges with
+    /// elevated latencies and prior failures before they completely trip into an open circuit.
+    pub async fn route_with_penalty_weighted_cascade(
+        &self,
+        payload: &MessagePayload,
+        requested_primary: ProtocolKind,
+        fallbacks: &[ProtocolKind],
+        now_epoch: u64,
+    ) -> Result<(ProtocolKind, DeliveryState)> {
+        let (chosen_primary, reordered_fallbacks) = {
+            let registry_guard = self.registry.read().await;
+            registry_guard.select_penalty_weighted_route(requested_primary, fallbacks)
+        };
+
+        let mut candidate_chain = vec![chosen_primary];
+        candidate_chain.extend(reordered_fallbacks);
+
+        for (idx, &candidate) in candidate_chain.iter().enumerate() {
+            let is_available = {
+                let mut registry_guard = self.registry.write().await;
+                if let Some(metric) = registry_guard.metrics.get_mut(&candidate) {
+                    metric.is_available_at(now_epoch)
+                } else {
+                    true
+                }
+            };
+
+            if !is_available {
+                continue;
+            }
+
+            let bridge_opt = {
+                let registry_guard = self.registry.read().await;
+                registry_guard.get(candidate)
+            };
+
+            if let Some(bridge_ref) = bridge_opt {
+                let bridge = bridge_ref.read().await;
+                let start = std::time::Instant::now();
+                match bridge.send_message(payload).await {
+                    Ok(_) => {
+                        let latency_ms = start.elapsed().as_millis() as u64;
+                        let mut registry_guard = self.registry.write().await;
+                        registry_guard.record_delivery_metrics(candidate, latency_ms, true, now_epoch);
+
+                        let state = if idx == 0 && candidate == requested_primary {
+                            DeliveryState::Delivered
+                        } else {
+                            DeliveryState::FallbackTriggered {
+                                from: requested_primary,
+                                to: candidate,
+                                reason: format!("Penalty-weighted fallback delivered via [{}]", candidate.as_str()),
+                            }
+                        };
+                        return Ok((candidate, state));
+                    }
+                    Err(e) => {
+                        let latency_ms = start.elapsed().as_millis() as u64;
+                        let mut registry_guard = self.registry.write().await;
+                        registry_guard.record_delivery_metrics(candidate, latency_ms, false, now_epoch);
+                        eprintln!(
+                            "Penalty weighted bridge [{}] failed: {}. Continuing cascade...",
+                            candidate.as_str(),
+                            e
+                        );
+                    }
+                }
+            }
+        }
+
+        Err(anyhow!(
+            "Penalty-weighted cascade failed: all candidate protocols exhausted for recipient {}",
+            payload.recipient_id
+        ))
     }
 }
 
@@ -1640,6 +1756,64 @@ mod tests {
             DeliveryState::FallbackTriggered { from, to, .. } => {
                 assert_eq!(from, ProtocolKind::Signal);
                 assert_eq!(to, ProtocolKind::Sms);
+            }
+            _ => panic!("Expected FallbackTriggered state"),
+        }
+    }
+
+    #[test]
+    fn test_select_penalty_weighted_route_prioritization() {
+        let mut registry = BridgeRegistry::new();
+        let now = 1700000000;
+
+        registry.register(ProtocolKind::Signal, Box::new(SignalBridge::new()));
+        registry.register(ProtocolKind::Matrix, Box::new(MatrixBridge::new()));
+
+        // Signal: low latency 30ms, but 1 failure -> penalty = 30 + 500 = 530
+        registry.record_delivery_metrics(ProtocolKind::Signal, 30, false, now);
+
+        // Matrix: 80ms latency, 0 failures -> penalty = 80
+        registry.record_delivery_metrics(ProtocolKind::Matrix, 80, true, now);
+
+        let (chosen, fallbacks) = registry.select_penalty_weighted_route(ProtocolKind::Signal, &[ProtocolKind::Matrix]);
+        assert_eq!(chosen, ProtocolKind::Matrix);
+        assert_eq!(fallbacks, vec![ProtocolKind::Signal]);
+    }
+
+    #[tokio::test]
+    async fn test_route_with_penalty_weighted_cascade_delivery() {
+        let mut registry = BridgeRegistry::new();
+        let now = 1700000000;
+
+        // 1. Signal bridge: degraded latency (450ms) + 1 failure
+        let signal = SignalBridge::new();
+        registry.register(ProtocolKind::Signal, Box::new(signal));
+        registry.record_delivery_metrics(ProtocolKind::Signal, 450, false, now);
+
+        // 2. Matrix bridge: fast (30ms), initialized, succeeds
+        let mut matrix = MatrixBridge::new();
+        matrix.initialize().await.unwrap();
+        registry.register(ProtocolKind::Matrix, Box::new(matrix));
+        registry.record_delivery_metrics(ProtocolKind::Matrix, 30, true, now);
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+
+        let payload = MessagePayload {
+            recipient_id: "!matrix_penalty:matrix.org".to_string(),
+            content: "Penalty-weighted routing test".to_string(),
+            fallback_protocol: "Matrix".to_string(),
+        };
+
+        let (chosen, state) = router
+            .route_with_penalty_weighted_cascade(&payload, ProtocolKind::Signal, &[ProtocolKind::Matrix], now + 5)
+            .await
+            .expect("Penalty weighted cascade should prioritize Matrix and deliver");
+
+        assert_eq!(chosen, ProtocolKind::Matrix);
+        match state {
+            DeliveryState::FallbackTriggered { from, to, .. } => {
+                assert_eq!(from, ProtocolKind::Signal);
+                assert_eq!(to, ProtocolKind::Matrix);
             }
             _ => panic!("Expected FallbackTriggered state"),
         }

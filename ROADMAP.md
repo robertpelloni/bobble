@@ -70,4 +70,5 @@ Major, long-term structural milestones and structural plans.
 - [x] Adaptive multi-pass fallback retry router (`route_with_adaptive_fallback_retry` in `router.rs`).
 - [x] Flapping network resilience with exponential circuit cooldown backoff (`route_with_flapping_resilience` in `router.rs`).
 - [x] Federated batch event broadcast with concurrency rate limiting under heavy load (`broadcast_batch_events_via_router` in `federation.rs`).
+- [x] Penalty-weighted route selection and proactive degradation avoidance (`route_with_penalty_weighted_cascade` in `router.rs`).
 - [ ] Full Milestone 6 verification and multi-node hardware test suite.

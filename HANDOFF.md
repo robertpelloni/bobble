@@ -26,7 +26,8 @@ Summarize everything learned during the session that was not obvious at the star
 - The desktop frontend UI was completely redesigned and consolidated into a high-value single-page multi-pane interface in React 19 + TypeScript + TailwindCSS.
 - Cross-platform mobile shell established in `omnicore-mobile/` using React Native / Expo, providing on-device conversation feeds, transport tags, and bridge telemetry.
 - Automation scripts were created in `scripts/`: `build.sh`, `test.sh`, `dev.sh`, `run.sh`.
-- Global version is governed by `VERSION.md` (0.8.4).
+- Global version is governed by `VERSION.md` (0.8.5).
+- Penalty-weighted candidate selection (`select_penalty_weighted_route`) and cascade routing added in `omnicore-engine/src/router.rs`.
 - High-throughput batch event broadcasting (`broadcast_batch_events_via_router`) with rate-limiting and stress testing added in `omnicore-engine/src/federation.rs`.
 - Flapping network resilience (`route_with_flapping_resilience`) and exponential circuit cooldown backoff added in `omnicore-engine/src/router.rs`.
 - Adaptive multi-pass fallback retry router (`route_with_adaptive_fallback_retry`) added in `omnicore-engine/src/router.rs`.
