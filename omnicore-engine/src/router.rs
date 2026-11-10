@@ -195,6 +195,50 @@ impl RouteBandwidthShaper {
     }
 }
 
+/// Route dispersal balancer distributing traffic across healthy multi-path candidate bridges
+/// to avoid socket starvation, provider rate limits, and serial modem bottlenecks.
+#[derive(Debug, Clone, Default)]
+pub struct RouteDispersalBalancer {
+    counter: usize,
+}
+
+impl RouteDispersalBalancer {
+    pub fn new() -> Self {
+        Self { counter: 0 }
+    }
+
+    /// Selects the primary bridge and fallback chain by rotating through candidate bridges.
+    pub fn select_dispersed_route(
+        &mut self,
+        primary: ProtocolKind,
+        fallbacks: &[ProtocolKind],
+    ) -> (ProtocolKind, Vec<ProtocolKind>) {
+        let mut candidates = vec![primary];
+        for &fb in fallbacks {
+            if !candidates.contains(&fb) {
+                candidates.push(fb);
+            }
+        }
+
+        if candidates.len() <= 1 {
+            return (primary, fallbacks.to_vec());
+        }
+
+        let idx = self.counter % candidates.len();
+        self.counter = self.counter.wrapping_add(1);
+
+        let chosen_primary = candidates[idx];
+        let mut remaining = Vec::with_capacity(candidates.len() - 1);
+        for (i, &cand) in candidates.iter().enumerate() {
+            if i != idx {
+                remaining.push(cand);
+            }
+        }
+
+        (chosen_primary, remaining)
+    }
+}
+
 /// Dynamic content transcoder adapting formatting between disparate protocol transports.
 /// Normalizes rich text (Markdown, HTML, URLs) into plain text for cellular SMS and constrained transports.
 pub struct PayloadContentTranscoder;
@@ -2310,6 +2354,33 @@ impl MultipathRouter {
         let _ = self.rehabilitate_stable_circuits(now_epoch, stability_window_sec).await;
         self.route_with_optimal_cascade(payload, primary, fallbacks, now_epoch).await
     }
+
+    /// Dispatches with traffic dispersal balancing across multiple candidate bridges.
+    /// Rotates primary candidate across dispatches to prevent socket exhaustion and rate limiting.
+    pub async fn route_with_dispersal_balancing(
+        &self,
+        payload: &MessagePayload,
+        primary: ProtocolKind,
+        fallbacks: &[ProtocolKind],
+        balancer: &mut RouteDispersalBalancer,
+        now_epoch: u64,
+    ) -> Result<(ProtocolKind, DeliveryState)> {
+        let (dispersed_primary, dispersed_fallbacks) = balancer.select_dispersed_route(primary, fallbacks);
+
+        let (chosen, mut state) = self
+            .route_with_optimal_cascade(payload, dispersed_primary, &dispersed_fallbacks, now_epoch)
+            .await?;
+
+        if chosen != primary {
+            state = DeliveryState::FallbackTriggered {
+                from: primary,
+                to: chosen,
+                reason: format!("Dispersal balancer routed via [{}]", chosen.as_str()),
+            };
+        }
+
+        Ok((chosen, state))
+    }
 }
 
 #[cfg(test)]
@@ -3896,5 +3967,76 @@ mod tests {
 
         assert_eq!(chosen, ProtocolKind::Signal);
         assert_eq!(state, DeliveryState::Delivered);
+    }
+
+    #[test]
+    fn test_route_dispersal_balancer_rotation() {
+        let mut balancer = RouteDispersalBalancer::new();
+        let primary = ProtocolKind::Signal;
+        let fallbacks = [ProtocolKind::Matrix, ProtocolKind::Sms];
+
+        // 1st call: selects candidates[0] = Signal
+        let (p1, f1) = balancer.select_dispersed_route(primary, &fallbacks);
+        assert_eq!(p1, ProtocolKind::Signal);
+        assert_eq!(f1, vec![ProtocolKind::Matrix, ProtocolKind::Sms]);
+
+        // 2nd call: rotates to candidates[1] = Matrix
+        let (p2, f2) = balancer.select_dispersed_route(primary, &fallbacks);
+        assert_eq!(p2, ProtocolKind::Matrix);
+        assert_eq!(f2, vec![ProtocolKind::Signal, ProtocolKind::Sms]);
+
+        // 3rd call: rotates to candidates[2] = SMS
+        let (p3, f3) = balancer.select_dispersed_route(primary, &fallbacks);
+        assert_eq!(p3, ProtocolKind::Sms);
+        assert_eq!(f3, vec![ProtocolKind::Signal, ProtocolKind::Matrix]);
+
+        // 4th call: wraps around to Signal
+        let (p4, _) = balancer.select_dispersed_route(primary, &fallbacks);
+        assert_eq!(p4, ProtocolKind::Signal);
+    }
+
+    #[tokio::test]
+    async fn test_route_with_dispersal_balancing_execution() {
+        let mut registry = BridgeRegistry::new();
+
+        let mut signal = SignalBridge::new();
+        signal.initialize().await.unwrap();
+        registry.register(ProtocolKind::Signal, Box::new(signal));
+
+        let mut matrix = MatrixBridge::new();
+        matrix.initialize().await.unwrap();
+        registry.register(ProtocolKind::Matrix, Box::new(matrix));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+        let mut balancer = RouteDispersalBalancer::new();
+
+        let payload = MessagePayload {
+            recipient_id: "+15552468".to_string(),
+            content: "Dispersal load balanced test message".to_string(),
+            fallback_protocol: "none".to_string(),
+        };
+
+        // First dispatch: Signal selected
+        let (c1, s1) = router
+            .route_with_dispersal_balancing(&payload, ProtocolKind::Signal, &[ProtocolKind::Matrix], &mut balancer, 1700000000)
+            .await
+            .unwrap();
+        assert_eq!(c1, ProtocolKind::Signal);
+        assert_eq!(s1, DeliveryState::Delivered);
+
+        // Second dispatch: Matrix selected
+        let (c2, s2) = router
+            .route_with_dispersal_balancing(&payload, ProtocolKind::Signal, &[ProtocolKind::Matrix], &mut balancer, 1700000001)
+            .await
+            .unwrap();
+        assert_eq!(c2, ProtocolKind::Matrix);
+        match s2 {
+            DeliveryState::FallbackTriggered { from, to, reason } => {
+                assert_eq!(from, ProtocolKind::Signal);
+                assert_eq!(to, ProtocolKind::Matrix);
+                assert!(reason.contains("Dispersal balancer"));
+            }
+            _ => panic!("Expected FallbackTriggered state"),
+        }
     }
 }

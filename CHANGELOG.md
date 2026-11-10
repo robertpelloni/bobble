@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 1.0.1:
+  - Route Dispersal Balancer: Implemented `RouteDispersalBalancer` and `MultipathRouter::route_with_dispersal_balancing` in `omnicore-engine/src/router.rs`. Distributes outbound messages across healthy candidate bridges to prevent modem serial contention, single-transport queue bottlenecks, and provider rate-limiting.
 - 1.0.0:
   - Federated Channel Dynamic Bridge Handover: Implemented `FederatedChannelBridgeHandover`, `handover_channel_bridge`, and `broadcast_event_with_bridge_handover` on `FederationManager` in `omnicore-engine/src/federation.rs`. Allows authorized admin members to migrate active federated group channels to alternative protocol bridges with cryptographic signature verification and vector clock causal continuity.
 - 0.9.9:
