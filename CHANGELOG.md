@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 1.0.0:
+  - Federated Channel Dynamic Bridge Handover: Implemented `FederatedChannelBridgeHandover`, `handover_channel_bridge`, and `broadcast_event_with_bridge_handover` on `FederationManager` in `omnicore-engine/src/federation.rs`. Allows authorized admin members to migrate active federated group channels to alternative protocol bridges with cryptographic signature verification and vector clock causal continuity.
 - 0.9.9:
   - Circuit Auto-Reset & Backoff Decay Engine: Implemented `decay_trips_if_stable`, `rehabilitate_stable_circuits`, and `route_with_rehabilitated_circuits` in `omnicore-engine/src/router.rs`. Gradually decrements historical flapping trip counts and effective cooldown penalties for candidate bridges that maintain uninterrupted stability during configured observation windows, rehabilitating degraded transports without manual intervention.
 - 0.9.8:

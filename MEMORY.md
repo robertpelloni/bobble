@@ -25,7 +25,8 @@ Ongoing internal architectural observations, codebase traits, and design prefere
 - Encrypted Storage: SQLCipher with AES-256-GCM encryption (`cipher_page_size=4096`, `kdf_iter=256000`, `foreign_keys=ON`). Schema includes `contacts`, `mappings`, `threads`, `messages`, `attachments`, `key_store`, and `sync_tokens`. Complete design documented in `omnicore-engine/SCHEMA.md`.
 - Dispatcher: Multi-path timeout fallback engine in `omnicore-engine/src/dispatcher.rs` executing concurrent queues and automated protocol fallback.
 - Desktop UI: React 19 + TypeScript + Vite + TailwindCSS running inside Tauri v2 shell with system tray controls.
-- Global Versioning: Centrally tracked in `VERSION.md` (currently 0.9.9).
+- Global Versioning: Centrally tracked in `VERSION.md` (currently 1.0.0).
+- Federated Channel Dynamic Bridge Handover: `omnicore-engine/src/federation.rs` implements `FederatedChannelBridgeHandover`, `handover_channel_bridge`, and `broadcast_event_with_bridge_handover` allowing authorized admin members to dynamically migrate active group channels across protocol bridges with cryptographic signature verification and vector clock causal continuity.
 - Circuit Auto-Reset & Backoff Decay: `omnicore-engine/src/router.rs` implements `decay_trips_if_stable`, `rehabilitate_stable_circuits`, and `route_with_rehabilitated_circuits`, decaying trip counts and backoff penalties on stable transports.
 - Bandwidth Quota & Traffic Shaper: `omnicore-engine/src/router.rs` implements `RouteBandwidthShaper` and `MultipathRouter::route_with_bandwidth_throttled_cascade`, enforcing sliding-window byte quotas per transport and cascading before hitting overages.
 - Route Cost & QoS Optimizer: `omnicore-engine/src/router.rs` implements `RouteCostOptimizer` and `MultipathRouter::route_with_cost_and_qos_optimization`, dynamically scoring routes across financial cost, battery drain profiles, and latency needs.

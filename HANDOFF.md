@@ -26,7 +26,8 @@ Summarize everything learned during the session that was not obvious at the star
 - The desktop frontend UI was completely redesigned and consolidated into a high-value single-page multi-pane interface in React 19 + TypeScript + TailwindCSS.
 - Cross-platform mobile shell established in `omnicore-mobile/` using React Native / Expo, providing on-device conversation feeds, transport tags, and bridge telemetry.
 - Automation scripts were created in `scripts/`: `build.sh`, `test.sh`, `dev.sh`, `run.sh`.
-- Global version is governed by `VERSION.md` (0.9.9).
+- Global version is governed by `VERSION.md` (1.0.0).
+- Federated Channel Dynamic Bridge Handover: Implemented `FederatedChannelBridgeHandover`, `handover_channel_bridge`, and `broadcast_event_with_bridge_handover` in `omnicore-engine/src/federation.rs` enabling decentralized group channel bridge migrations.
 - Circuit Auto-Reset & Backoff Decay: Implemented `decay_trips_if_stable`, `rehabilitate_stable_circuits`, and `route_with_rehabilitated_circuits` in `omnicore-engine/src/router.rs` decaying consecutive trip penalties on stable candidate bridges.
 - Bandwidth Quota & Traffic Shaper: Implemented `RouteBandwidthShaper` and `MultipathRouter::route_with_bandwidth_throttled_cascade` in `omnicore-engine/src/router.rs` enforcing per-transport sliding-window byte quotas and cascading upon budget exhaustion.
 - Cross-Protocol Route Cost & QoS Optimizer: Implemented `RouteCostOptimizer` and `MultipathRouter::route_with_cost_and_qos_optimization` in `omnicore-engine/src/router.rs` balancing financial cost, battery drain profiles, and low-latency transport modes.
