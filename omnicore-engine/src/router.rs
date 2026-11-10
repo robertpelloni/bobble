@@ -462,6 +462,65 @@ impl BridgeConcurrencyGuard {
     }
 }
 
+/// Sliding-window latency sample accumulator estimating dynamic p50/p95 latency envelopes
+/// to compute early-abort timeout deadlines and eliminate tail latency stalls across bridges.
+#[derive(Debug, Clone)]
+pub struct RouteLatencyEstimator {
+    samples: HashMap<ProtocolKind, Vec<u64>>,
+    window_size: usize,
+}
+
+impl Default for RouteLatencyEstimator {
+    fn default() -> Self {
+        Self {
+            samples: HashMap::new(),
+            window_size: 50,
+        }
+    }
+}
+
+impl RouteLatencyEstimator {
+    pub fn new(window_size: usize) -> Self {
+        Self {
+            samples: HashMap::new(),
+            window_size: window_size.max(5),
+        }
+    }
+
+    /// Records a new delivery latency observation for a protocol bridge.
+    pub fn record_sample(&mut self, protocol: ProtocolKind, latency_ms: u64) {
+        let entry = self.samples.entry(protocol).or_default();
+        if entry.len() >= self.window_size {
+            entry.remove(0);
+        }
+        entry.push(latency_ms);
+    }
+
+    /// Computes the p50 (median) latency for a candidate bridge. Defaults to 50ms if unobserved.
+    pub fn p50_latency_ms(&self, protocol: ProtocolKind) -> u64 {
+        self.compute_percentile(protocol, 0.50).unwrap_or(50)
+    }
+
+    /// Computes the p95 latency for a candidate bridge. Defaults to 250ms if unobserved.
+    pub fn p95_latency_ms(&self, protocol: ProtocolKind) -> u64 {
+        self.compute_percentile(protocol, 0.95).unwrap_or(250)
+    }
+
+    fn compute_percentile(&self, protocol: ProtocolKind, percentile: f64) -> Option<u64> {
+        let entry = self.samples.get(&protocol)?;
+        if entry.is_empty() {
+            return None;
+        }
+
+        let mut sorted = entry.clone();
+        sorted.sort_unstable();
+
+        let rank = ((sorted.len() as f64 * percentile).ceil() as usize).saturating_sub(1);
+        let idx = rank.min(sorted.len() - 1);
+        Some(sorted[idx])
+    }
+}
+
 /// Egress deduplication ledger ensuring exact-once transmission semantics across multi-protocol fallback cascades.
 pub struct EgressDeduplicationLedger {
     transmitted_digests: HashMap<String, u64>, // digest -> expiration timestamp
@@ -2381,6 +2440,107 @@ impl MultipathRouter {
 
         Ok((chosen, state))
     }
+
+    /// Dispatches across candidate bridges with dynamic percentile-bounded timeouts.
+    /// If an attempt on a candidate bridge exceeds its historical p95 latency envelope,
+    /// aborts the attempt and immediately cascades to alternate bridges to eliminate tail latency stalls.
+    pub async fn route_with_percentile_bounded_cascade(
+        &self,
+        payload: &MessagePayload,
+        primary: ProtocolKind,
+        fallbacks: &[ProtocolKind],
+        estimator: &mut RouteLatencyEstimator,
+        now_epoch: u64,
+    ) -> Result<(ProtocolKind, DeliveryState)> {
+        let (chosen_primary, reordered_fallbacks) = {
+            let registry_guard = self.registry.read().await;
+            registry_guard.select_optimal_route(primary, fallbacks)
+        };
+
+        let mut candidate_chain = vec![chosen_primary];
+        candidate_chain.extend(reordered_fallbacks);
+
+        for (idx, &candidate) in candidate_chain.iter().enumerate() {
+            let is_available = {
+                let mut registry_guard = self.registry.write().await;
+                if let Some(metric) = registry_guard.metrics.get_mut(&candidate) {
+                    metric.is_available_at(now_epoch)
+                } else {
+                    true
+                }
+            };
+
+            if !is_available {
+                continue;
+            }
+
+            let bridge_opt = {
+                let registry_guard = self.registry.read().await;
+                registry_guard.get(candidate)
+            };
+
+            if let Some(bridge_ref) = bridge_opt {
+                let bridge = bridge_ref.read().await;
+                let p95_deadline = estimator.p95_latency_ms(candidate).max(20);
+                let start = std::time::Instant::now();
+
+                // Bounded dispatch with p95 timeout
+                let send_res = tokio::time::timeout(
+                    tokio::time::Duration::from_millis(p95_deadline),
+                    bridge.send_message(payload),
+                )
+                .await;
+
+                match send_res {
+                    Ok(Ok(_)) => {
+                        let latency_ms = start.elapsed().as_millis() as u64;
+                        estimator.record_sample(candidate, latency_ms);
+                        let mut registry_guard = self.registry.write().await;
+                        registry_guard.record_delivery_metrics(candidate, latency_ms, true, now_epoch);
+
+                        let state = if idx == 0 && candidate == primary {
+                            DeliveryState::Delivered
+                        } else {
+                            DeliveryState::FallbackTriggered {
+                                from: primary,
+                                to: candidate,
+                                reason: format!("Percentile-bounded fallback delivered via [{}]", candidate.as_str()),
+                            }
+                        };
+                        return Ok((candidate, state));
+                    }
+                    Ok(Err(e)) => {
+                        let latency_ms = start.elapsed().as_millis() as u64;
+                        estimator.record_sample(candidate, latency_ms);
+                        let mut registry_guard = self.registry.write().await;
+                        registry_guard.record_delivery_metrics(candidate, latency_ms, false, now_epoch);
+                        eprintln!(
+                            "Percentile-bounded bridge [{}] dispatch failed: {}. Continuing cascade...",
+                            candidate.as_str(),
+                            e
+                        );
+                    }
+                    Err(_) => {
+                        // Timeout exceeded p95 deadline -> early abort and cascade!
+                        let latency_ms = p95_deadline;
+                        estimator.record_sample(candidate, latency_ms.saturating_mul(2));
+                        let mut registry_guard = self.registry.write().await;
+                        registry_guard.record_delivery_metrics(candidate, latency_ms, false, now_epoch);
+                        eprintln!(
+                            "Percentile-bounded bridge [{}] exceeded p95 deadline ({}ms). Early aborting to cascade...",
+                            candidate.as_str(),
+                            p95_deadline
+                        );
+                    }
+                }
+            }
+        }
+
+        Err(anyhow!(
+            "Percentile-bounded routing failed: all candidates exhausted or exceeded latency envelopes for recipient {}",
+            payload.recipient_id
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -4035,6 +4195,69 @@ mod tests {
                 assert_eq!(from, ProtocolKind::Signal);
                 assert_eq!(to, ProtocolKind::Matrix);
                 assert!(reason.contains("Dispersal balancer"));
+            }
+            _ => panic!("Expected FallbackTriggered state"),
+        }
+    }
+
+    #[test]
+    fn test_route_latency_estimator_percentiles() {
+        let mut estimator = RouteLatencyEstimator::new(10);
+
+        // Record samples: 10, 20, 30, 40, 50, 60, 70, 80, 90, 100
+        for lat in (10..=100).step_by(10) {
+            estimator.record_sample(ProtocolKind::Matrix, lat);
+        }
+
+        // p50 (median) should be around 50ms
+        let p50 = estimator.p50_latency_ms(ProtocolKind::Matrix);
+        assert!((40..=60).contains(&p50));
+
+        // p95 should be at the upper edge (90-100ms)
+        let p95 = estimator.p95_latency_ms(ProtocolKind::Matrix);
+        assert!((90..=100).contains(&p95));
+    }
+
+    #[tokio::test]
+    async fn test_route_with_percentile_bounded_cascade_delivery() {
+        let mut registry = BridgeRegistry::new();
+
+        // 1. Signal bridge: uninitialized (fails fast)
+        let signal = SignalBridge::new();
+        registry.register(ProtocolKind::Signal, Box::new(signal));
+
+        // 2. Matrix bridge: initialized (succeeds within p95)
+        let mut matrix = MatrixBridge::new();
+        matrix.initialize().await.unwrap();
+        registry.register(ProtocolKind::Matrix, Box::new(matrix));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+        let mut estimator = RouteLatencyEstimator::new(10);
+        estimator.record_sample(ProtocolKind::Matrix, 40);
+
+        let payload = MessagePayload {
+            recipient_id: "!matrix_p95:matrix.org".to_string(),
+            content: "Percentile bounded dispatch message".to_string(),
+            fallback_protocol: "none".to_string(),
+        };
+
+        let (chosen, state) = router
+            .route_with_percentile_bounded_cascade(
+                &payload,
+                ProtocolKind::Signal,
+                &[ProtocolKind::Matrix],
+                &mut estimator,
+                1700000000,
+            )
+            .await
+            .expect("Percentile bounded cascade should succeed via Matrix");
+
+        assert_eq!(chosen, ProtocolKind::Matrix);
+        match state {
+            DeliveryState::FallbackTriggered { from, to, reason } => {
+                assert_eq!(from, ProtocolKind::Signal);
+                assert_eq!(to, ProtocolKind::Matrix);
+                assert!(reason.contains("Percentile-bounded"));
             }
             _ => panic!("Expected FallbackTriggered state"),
         }

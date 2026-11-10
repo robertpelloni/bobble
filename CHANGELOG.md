@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 1.0.3:
+  - Dynamic Latency Window & Percentile-Bounded Routing: Implemented `RouteLatencyEstimator` and `MultipathRouter::route_with_percentile_bounded_cascade` in `omnicore-engine/src/router.rs`. Computes moving p50/p95 latency percentiles over a sliding window per candidate bridge and triggers early timeout cascades when an attempt exceeds historical p95 latency envelopes, eliminating tail-latency stalls and socket hangs.
 - 1.0.2:
   - Federated Multi-Party Delivery Ledger: Implemented `FederatedDeliveryLedger` and `FederationManager::broadcast_event_with_delivery_ledger` in `omnicore-engine/src/federation.rs`. Tracks member-by-member acknowledgment receipts and per-recipient fallback cascade history across multi-bridge mesh broadcasts, selectively retrying unacknowledged members across alternate protocol bridges while avoiding duplicate retransmissions to already-confirmed peers.
 - 1.0.1:
