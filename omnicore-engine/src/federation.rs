@@ -151,6 +151,49 @@ impl ChannelEvent {
     }
 }
 
+/// Ledger tracking member-by-member acknowledgment receipts and delivery status across multi-bridge mesh broadcasts.
+#[derive(Debug, Clone, Default)]
+pub struct FederatedDeliveryLedger {
+    delivered_members: HashMap<String, (ProtocolKind, u64)>, // member_id -> (protocol, delivery_timestamp)
+    failed_members: HashMap<String, Vec<ProtocolKind>>,       // member_id -> attempted failed protocols
+}
+
+impl FederatedDeliveryLedger {
+    pub fn new() -> Self {
+        Self {
+            delivered_members: HashMap::new(),
+            failed_members: HashMap::new(),
+        }
+    }
+
+    pub fn mark_delivered(&mut self, member_id: &str, protocol: ProtocolKind, timestamp: u64) {
+        self.delivered_members.insert(member_id.to_string(), (protocol, timestamp));
+        self.failed_members.remove(member_id);
+    }
+
+    pub fn record_failure(&mut self, member_id: &str, protocol: ProtocolKind) {
+        self.failed_members
+            .entry(member_id.to_string())
+            .or_default()
+            .push(protocol);
+    }
+
+    pub fn is_delivered(&self, member_id: &str) -> bool {
+        self.delivered_members.contains_key(member_id)
+    }
+
+    pub fn delivered_count(&self) -> usize {
+        self.delivered_members.len()
+    }
+
+    pub fn pending_or_failed_members<'a>(&self, all_members: impl Iterator<Item = &'a String>) -> Vec<String> {
+        all_members
+            .filter(|&m| !self.is_delivered(m))
+            .cloned()
+            .collect()
+    }
+}
+
 /// Record specifying a dynamic protocol bridge handover migration for a federated channel.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FederatedChannelBridgeHandover {
@@ -472,6 +515,52 @@ impl FederationManager {
                 .route_with_cascade(&payload, primary_bridge, &channel.active_fallbacks)
                 .await?;
             results.push((member_id.clone(), chosen, state));
+        }
+
+        Ok(results)
+    }
+
+    /// Broadcasts an event using a FederatedDeliveryLedger to avoid duplicate deliveries to already-confirmed
+    /// members and selectively retrying pending members across alternate protocol bridges.
+    pub async fn broadcast_event_with_delivery_ledger(
+        &self,
+        channel_id: &str,
+        event: &ChannelEvent,
+        router: &MultipathRouter,
+        ledger: &mut FederatedDeliveryLedger,
+        primary_proto: ProtocolKind,
+        fallback_protos: &[ProtocolKind],
+        now_epoch: u64,
+    ) -> Result<Vec<(String, ProtocolKind, DeliveryState)>> {
+        let channel = self.channels.get(channel_id).ok_or_else(|| anyhow!("Channel not found"))?;
+        let mut results = Vec::new();
+
+        for (member_id, _) in &channel.members {
+            if member_id == &event.author_id {
+                continue; // Do not echo back to author
+            }
+
+            // Skip if this member has already confirmed delivery in the ledger
+            if ledger.is_delivered(member_id) {
+                continue;
+            }
+
+            let payload = MessagePayload {
+                recipient_id: member_id.clone(),
+                content: format!("[LedgerRelay:{}] {}", channel.name, event.payload),
+                fallback_protocol: fallback_protos.first().map(|p| p.as_str().to_string()).unwrap_or_default(),
+            };
+
+            match router.route_with_cascade(&payload, primary_proto, fallback_protos).await {
+                Ok((chosen, state)) => {
+                    ledger.mark_delivered(member_id, chosen, now_epoch);
+                    results.push((member_id.clone(), chosen, state));
+                }
+                Err(err) => {
+                    ledger.record_failure(member_id, primary_proto);
+                    eprintln!("Delivery to member [{}] failed across candidate bridges: {}", member_id, err);
+                }
+            }
         }
 
         Ok(results)
@@ -913,5 +1002,86 @@ mod tests {
         assert_eq!(delivery[0].0, "bob");
         assert_eq!(delivery[0].1, ProtocolKind::Matrix);
         assert_eq!(delivery[0].2, DeliveryState::Delivered);
+    }
+
+    #[tokio::test]
+    async fn test_broadcast_event_with_delivery_ledger_deduplication_and_retry() {
+        use crate::bridge::ProtocolBridge;
+        use crate::bridges::matrix::MatrixBridge;
+        use crate::bridges::signal::SignalBridge;
+        use crate::router::BridgeRegistry;
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+
+        let mut mgr = FederationManager::new();
+        mgr.create_channel("chan_ledger_test", "Ledger Room", "Delivery Ledger Tracking", "alice");
+
+        let chan = mgr.get_channel_mut("chan_ledger_test").unwrap();
+        for &peer in &["bob", "charlie"] {
+            let mut clk = VectorClock::new();
+            clk.increment(peer);
+            chan.apply_event(ChannelEvent {
+                event_id: format!("ev_join_{}", peer),
+                channel_id: "chan_ledger_test".to_string(),
+                author_id: peer.to_string(),
+                event_type: "member_join".to_string(),
+                payload: format!("{} joined", peer),
+                clock: clk,
+                timestamp: 1000,
+                public_key: None,
+                signature: None,
+            }).unwrap();
+        }
+
+        let mut registry = BridgeRegistry::new();
+        // Signal bridge: uninitialized (fails)
+        let signal = SignalBridge::new();
+        registry.register(ProtocolKind::Signal, Box::new(signal));
+
+        // Matrix bridge: initialized (succeeds)
+        let mut matrix = MatrixBridge::new();
+        let _ = <MatrixBridge as ProtocolBridge>::initialize(&mut matrix).await;
+        registry.register(ProtocolKind::Matrix, Box::new(matrix));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+        let mut ledger = FederatedDeliveryLedger::new();
+
+        let chan_mut = mgr.get_channel_mut("chan_ledger_test").unwrap();
+        let msg = chan_mut.post_message("alice", "Multi-party ledger broadcast").unwrap();
+
+        // 1. First broadcast pass: cascades from Signal to Matrix, records both bob and charlie in ledger
+        let res1 = mgr
+            .broadcast_event_with_delivery_ledger(
+                "chan_ledger_test",
+                &msg,
+                &router,
+                &mut ledger,
+                ProtocolKind::Signal,
+                &[ProtocolKind::Matrix],
+                1700000000,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res1.len(), 2);
+        assert!(ledger.is_delivered("bob"));
+        assert!(ledger.is_delivered("charlie"));
+        assert_eq!(ledger.delivered_count(), 2);
+
+        // 2. Second broadcast pass with same ledger: both peers already confirmed, zero retransmissions
+        let res2 = mgr
+            .broadcast_event_with_delivery_ledger(
+                "chan_ledger_test",
+                &msg,
+                &router,
+                &mut ledger,
+                ProtocolKind::Signal,
+                &[ProtocolKind::Matrix],
+                1700000010,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res2.len(), 0); // No duplicate sends
     }
 }

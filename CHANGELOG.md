@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 1.0.2:
+  - Federated Multi-Party Delivery Ledger: Implemented `FederatedDeliveryLedger` and `FederationManager::broadcast_event_with_delivery_ledger` in `omnicore-engine/src/federation.rs`. Tracks member-by-member acknowledgment receipts and per-recipient fallback cascade history across multi-bridge mesh broadcasts, selectively retrying unacknowledged members across alternate protocol bridges while avoiding duplicate retransmissions to already-confirmed peers.
 - 1.0.1:
   - Route Dispersal Balancer: Implemented `RouteDispersalBalancer` and `MultipathRouter::route_with_dispersal_balancing` in `omnicore-engine/src/router.rs`. Distributes outbound messages across healthy candidate bridges to prevent modem serial contention, single-transport queue bottlenecks, and provider rate-limiting.
 - 1.0.0:

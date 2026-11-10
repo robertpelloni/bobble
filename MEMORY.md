@@ -25,7 +25,8 @@ Ongoing internal architectural observations, codebase traits, and design prefere
 - Encrypted Storage: SQLCipher with AES-256-GCM encryption (`cipher_page_size=4096`, `kdf_iter=256000`, `foreign_keys=ON`). Schema includes `contacts`, `mappings`, `threads`, `messages`, `attachments`, `key_store`, and `sync_tokens`. Complete design documented in `omnicore-engine/SCHEMA.md`.
 - Dispatcher: Multi-path timeout fallback engine in `omnicore-engine/src/dispatcher.rs` executing concurrent queues and automated protocol fallback.
 - Desktop UI: React 19 + TypeScript + Vite + TailwindCSS running inside Tauri v2 shell with system tray controls.
-- Global Versioning: Centrally tracked in `VERSION.md` (currently 1.0.1).
+- Global Versioning: Centrally tracked in `VERSION.md` (currently 1.0.2).
+- Multi-Party Delivery Ledger: `omnicore-engine/src/federation.rs` implements `FederatedDeliveryLedger` and `FederationManager::broadcast_event_with_delivery_ledger`, tracking recipient confirmations across multi-bridge mesh relays and avoiding duplicate delivery during selective retries.
 - Route Dispersal Balancer: `omnicore-engine/src/router.rs` implements `RouteDispersalBalancer` and `MultipathRouter::route_with_dispersal_balancing`, balancing egress across candidate bridges to prevent modem serial bottlenecks and socket starvation.
 - Federated Channel Dynamic Bridge Handover: `omnicore-engine/src/federation.rs` implements `FederatedChannelBridgeHandover`, `handover_channel_bridge`, and `broadcast_event_with_bridge_handover` allowing authorized admin members to dynamically migrate active group channels across protocol bridges with cryptographic signature verification and vector clock causal continuity.
 - Circuit Auto-Reset & Backoff Decay: `omnicore-engine/src/router.rs` implements `decay_trips_if_stable`, `rehabilitate_stable_circuits`, and `route_with_rehabilitated_circuits`, decaying trip counts and backoff penalties on stable transports.

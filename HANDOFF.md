@@ -26,7 +26,8 @@ Summarize everything learned during the session that was not obvious at the star
 - The desktop frontend UI was completely redesigned and consolidated into a high-value single-page multi-pane interface in React 19 + TypeScript + TailwindCSS.
 - Cross-platform mobile shell established in `omnicore-mobile/` using React Native / Expo, providing on-device conversation feeds, transport tags, and bridge telemetry.
 - Automation scripts were created in `scripts/`: `build.sh`, `test.sh`, `dev.sh`, `run.sh`.
-- Global version is governed by `VERSION.md` (1.0.1).
+- Global version is governed by `VERSION.md` (1.0.2).
+- Multi-Party Delivery Ledger: Implemented `FederatedDeliveryLedger` and `FederationManager::broadcast_event_with_delivery_ledger` in `omnicore-engine/src/federation.rs` to track member receipts across multi-bridge mesh relays and avoid duplicate transmissions during selective retries.
 - Route Dispersal Balancer: Implemented `RouteDispersalBalancer` and `MultipathRouter::route_with_dispersal_balancing` in `omnicore-engine/src/router.rs` rotating egress across healthy bridges to eliminate socket exhaustion and rate-limiting.
 - Federated Channel Dynamic Bridge Handover: Implemented `FederatedChannelBridgeHandover`, `handover_channel_bridge`, and `broadcast_event_with_bridge_handover` in `omnicore-engine/src/federation.rs` enabling decentralized group channel bridge migrations.
 - Circuit Auto-Reset & Backoff Decay: Implemented `decay_trips_if_stable`, `rehabilitate_stable_circuits`, and `route_with_rehabilitated_circuits` in `omnicore-engine/src/router.rs` decaying consecutive trip penalties on stable candidate bridges.
