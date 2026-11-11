@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 1.0.4:
+  - Silent Delivery Drop Canary Detector: Implemented `CanaryDropDetector` and `MultipathRouter::route_with_canary_drop_detection` in `omnicore-engine/src/router.rs`. Emits non-disruptive canary challenge nonces prior to candidate bridge message dispatches to proactively detect silent packet drops, ISP blackholing, or gateway drops, immediately triggering fallback cascades.
 - 1.0.3:
   - Dynamic Latency Window & Percentile-Bounded Routing: Implemented `RouteLatencyEstimator` and `MultipathRouter::route_with_percentile_bounded_cascade` in `omnicore-engine/src/router.rs`. Computes moving p50/p95 latency percentiles over a sliding window per candidate bridge and triggers early timeout cascades when an attempt exceeds historical p95 latency envelopes, eliminating tail-latency stalls and socket hangs.
 - 1.0.2:

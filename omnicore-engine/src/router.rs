@@ -521,6 +521,64 @@ impl RouteLatencyEstimator {
     }
 }
 
+/// Canary probe detector testing for silent packet drops, ISP blackholing, or gateway drops.
+#[derive(Debug, Clone)]
+pub struct CanaryDropDetector {
+    pending_canaries: HashMap<String, (ProtocolKind, u64)>, // nonce -> (protocol, deadline_epoch_sec)
+    canary_timeout_sec: u64,
+}
+
+impl Default for CanaryDropDetector {
+    fn default() -> Self {
+        Self {
+            pending_canaries: HashMap::new(),
+            canary_timeout_sec: 10,
+        }
+    }
+}
+
+impl CanaryDropDetector {
+    pub fn new(canary_timeout_sec: u64) -> Self {
+        Self {
+            pending_canaries: HashMap::new(),
+            canary_timeout_sec,
+        }
+    }
+
+    /// Generates a canary probe nonce and records its confirmation deadline.
+    pub fn issue_canary(&mut self, protocol: ProtocolKind, now_sec: u64) -> (String, MessagePayload) {
+        let nonce = format!("canary_{:?}_{}", protocol, now_sec);
+        let deadline = now_sec + self.canary_timeout_sec;
+        self.pending_canaries.insert(nonce.clone(), (protocol, deadline));
+
+        let payload = MessagePayload {
+            recipient_id: "__canary_echo__".to_string(),
+            content: format!("CANARY_PROBE:{}", nonce),
+            fallback_protocol: "none".to_string(),
+        };
+
+        (nonce, payload)
+    }
+
+    /// Verifies and acknowledges a returned canary probe echo.
+    pub fn acknowledge_canary(&mut self, nonce: &str, protocol: ProtocolKind, now_sec: u64) -> bool {
+        if let Some((proto, deadline)) = self.pending_canaries.remove(nonce) {
+            proto == protocol && now_sec <= deadline
+        } else {
+            false
+        }
+    }
+
+    /// Returns true if the canary probe has timed out without confirmation (indicating silent drop).
+    pub fn is_silent_drop(&self, nonce: &str, now_sec: u64) -> bool {
+        if let Some(&(_, deadline)) = self.pending_canaries.get(nonce) {
+            now_sec > deadline
+        } else {
+            false
+        }
+    }
+}
+
 /// Egress deduplication ledger ensuring exact-once transmission semantics across multi-protocol fallback cascades.
 pub struct EgressDeduplicationLedger {
     transmitted_digests: HashMap<String, u64>, // digest -> expiration timestamp
@@ -2541,6 +2599,103 @@ impl MultipathRouter {
             payload.recipient_id
         ))
     }
+
+    /// Dispatches with active canary probe silent-drop detection.
+    /// Issues an active canary probe prior to dispatch; if the candidate bridge silently drops the canary,
+    /// marks failure and immediately cascades to alternate transports.
+    pub async fn route_with_canary_drop_detection<F>(
+        &self,
+        payload: &MessagePayload,
+        primary: ProtocolKind,
+        fallbacks: &[ProtocolKind],
+        detector: &mut CanaryDropDetector,
+        echo_simulator: F,
+        now_epoch: u64,
+    ) -> Result<(ProtocolKind, DeliveryState)>
+    where
+        F: Fn(ProtocolKind, &str) -> bool,
+    {
+        let (chosen_primary, reordered_fallbacks) = {
+            let registry_guard = self.registry.read().await;
+            registry_guard.select_optimal_route(primary, fallbacks)
+        };
+
+        let mut candidate_chain = vec![chosen_primary];
+        candidate_chain.extend(reordered_fallbacks);
+
+        for (idx, &candidate) in candidate_chain.iter().enumerate() {
+            let is_available = {
+                let mut registry_guard = self.registry.write().await;
+                if let Some(metric) = registry_guard.metrics.get_mut(&candidate) {
+                    metric.is_available_at(now_epoch)
+                } else {
+                    true
+                }
+            };
+
+            if !is_available {
+                continue;
+            }
+
+            // Issue and check canary probe
+            let (nonce, _probe_payload) = detector.issue_canary(candidate, now_epoch);
+            let canary_echoed = echo_simulator(candidate, &nonce);
+
+            if !canary_echoed || !detector.acknowledge_canary(&nonce, candidate, now_epoch) {
+                // Silent drop detected on canary
+                let mut registry_guard = self.registry.write().await;
+                registry_guard.record_delivery_metrics(candidate, 50, false, now_epoch);
+                eprintln!(
+                    "Bridge [{}] silent drop canary check failed. Cascading...",
+                    candidate.as_str()
+                );
+                continue;
+            }
+
+            let bridge_opt = {
+                let registry_guard = self.registry.read().await;
+                registry_guard.get(candidate)
+            };
+
+            if let Some(bridge_ref) = bridge_opt {
+                let bridge = bridge_ref.read().await;
+                let start = std::time::Instant::now();
+                match bridge.send_message(payload).await {
+                    Ok(_) => {
+                        let latency_ms = start.elapsed().as_millis() as u64;
+                        let mut registry_guard = self.registry.write().await;
+                        registry_guard.record_delivery_metrics(candidate, latency_ms, true, now_epoch);
+
+                        let state = if idx == 0 && candidate == primary {
+                            DeliveryState::Delivered
+                        } else {
+                            DeliveryState::FallbackTriggered {
+                                from: primary,
+                                to: candidate,
+                                reason: format!("Canary-verified fallback delivered via [{}]", candidate.as_str()),
+                            }
+                        };
+                        return Ok((candidate, state));
+                    }
+                    Err(e) => {
+                        let latency_ms = start.elapsed().as_millis() as u64;
+                        let mut registry_guard = self.registry.write().await;
+                        registry_guard.record_delivery_metrics(candidate, latency_ms, false, now_epoch);
+                        eprintln!(
+                            "Canary-verified bridge [{}] dispatch failed: {}. Continuing cascade...",
+                            candidate.as_str(),
+                            e
+                        );
+                    }
+                }
+            }
+        }
+
+        Err(anyhow!(
+            "Canary drop routing failed: all candidates exhausted or blackholed for recipient {}",
+            payload.recipient_id
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -2936,6 +3091,72 @@ mod tests {
             DeliveryState::FallbackTriggered { from, to, .. } => {
                 assert_eq!(from, ProtocolKind::IMessage);
                 assert_eq!(to, ProtocolKind::Sms);
+            }
+            _ => panic!("Expected FallbackTriggered state"),
+        }
+    }
+
+    #[test]
+    fn test_canary_drop_detector_lifecycle() {
+        let mut detector = CanaryDropDetector::new(5); // 5s timeout
+        let now = 1000;
+
+        let (nonce, probe) = detector.issue_canary(ProtocolKind::Signal, now);
+        assert!(probe.content.contains(&nonce));
+
+        // Unexpired acknowledgment succeeds
+        assert!(detector.acknowledge_canary(&nonce, ProtocolKind::Signal, now + 3));
+
+        // Expired or unknown nonce fails
+        let (nonce2, _) = detector.issue_canary(ProtocolKind::Signal, now);
+        assert!(detector.is_silent_drop(&nonce2, now + 6));
+        assert!(!detector.acknowledge_canary(&nonce2, ProtocolKind::Signal, now + 6));
+    }
+
+    #[tokio::test]
+    async fn test_route_with_canary_drop_detection_failover() {
+        let mut registry = BridgeRegistry::new();
+
+        // 1. Signal bridge: initialized, but simulated canary drop (e.g. ISP blackhole)
+        let mut signal = SignalBridge::new();
+        signal.initialize().await.unwrap();
+        registry.register(ProtocolKind::Signal, Box::new(signal));
+
+        // 2. Matrix bridge: initialized, canary succeeds
+        let mut matrix = MatrixBridge::new();
+        matrix.initialize().await.unwrap();
+        registry.register(ProtocolKind::Matrix, Box::new(matrix));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+        let mut detector = CanaryDropDetector::new(10);
+
+        // Echo simulator drops Signal, confirms Matrix
+        let echo_sim = |proto: ProtocolKind, _nonce: &str| proto == ProtocolKind::Matrix;
+
+        let payload = MessagePayload {
+            recipient_id: "!matrix_canary_room:matrix.org".to_string(),
+            content: "Canary drop verification test message".to_string(),
+            fallback_protocol: "none".to_string(),
+        };
+
+        let (chosen, state) = router
+            .route_with_canary_drop_detection(
+                &payload,
+                ProtocolKind::Signal,
+                &[ProtocolKind::Matrix],
+                &mut detector,
+                echo_sim,
+                1700000000,
+            )
+            .await
+            .expect("Should detect Signal silent drop and cascade to Matrix");
+
+        assert_eq!(chosen, ProtocolKind::Matrix);
+        match state {
+            DeliveryState::FallbackTriggered { from, to, reason } => {
+                assert_eq!(from, ProtocolKind::Signal);
+                assert_eq!(to, ProtocolKind::Matrix);
+                assert!(reason.contains("Canary-verified"));
             }
             _ => panic!("Expected FallbackTriggered state"),
         }
