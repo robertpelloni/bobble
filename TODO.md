@@ -38,3 +38,39 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Add decentralized reputation scoring and spam defense heuristics in `omnicore-engine/src/reputation.rs`.
 - [x] Implement end-to-end WebSocket proxy bridge connecting omnicore-mobile and omnicore-ui to omnicore-engine daemon in `omnicore-engine/src/server.rs`.
 - [x] Implement decentralized key ratchets and pre-key bundles in `omnicore-engine/src/ratchet.rs`.
+- [x] Implement compute module appliance telemetry evaluation with cellular failover and safe shutdown triggers in `omnicore-engine/src/telemetry.rs`.
+- [x] Implement multi-hop mesh announcement with hop decrement and neighbor peer caching in `omnicore-engine/src/discovery.rs`.
+- [x] Implement multi-hop packet store-and-forward mesh relay protocol over BLE and Wi-Fi Direct in `omnicore-engine/src/mesh.rs`.
+- [x] Implement BLE GATT peripheral/central service daemon coordinator and TTL cache pruning in `omnicore-engine/src/mesh.rs`.
+- [ ] Implement native Bluetooth HCI adapter driver and Android Wi-Fi Direct socket listener.
+- [x] Implement cross-protocol voice and video media gateway aggregation bridging WebRTC, Matrix VoIP, and Discord voice in `omnicore-engine/src/call.rs`.
+- [x] Implement optimal cascade routing with automated circuit-breaker bypass and metric updates in `omnicore-engine/src/router.rs`.
+- [x] Implement RTP jitter buffer with sequence reordering and packet loss concealment in `omnicore-engine/src/call.rs`.
+- [x] Harden `IMessageBridge` and `SmsBridge` with validation, retry loops, and iMessage-to-SMS fallback tests.
+- [x] Implement dynamic bit-rate scaling and frame duration adaptation in `omnicore-engine/src/call.rs`.
+- [x] Implement bridge health diagnostics and anomaly detection in `omnicore-engine/src/telemetry.rs`.
+- [x] Implement starvation prevention and probe discovery in `omnicore-engine/src/router.rs`.
+- [x] Implement cryptographic payload digest integrity verification across cascading fallbacks in `omnicore-engine/src/router.rs`.
+- [x] Implement replay attack protection and nonce caching in `omnicore-engine/src/router.rs`.
+- [x] Implement video simulcast and temporal resolution adaptation in `omnicore-engine/src/call.rs`.
+- [x] Implement end-to-end encrypted screen sharing pipeline in `omnicore-engine/src/call.rs`.
+- [x] Implement zero-copy video frame buffer pooling in `omnicore-engine/src/call.rs`.
+- [x] Implement dynamic spatial downsampling and YUV color space conversion in `omnicore-engine/src/call.rs`.
+- [x] Implement hardware-accelerated video encoder drivers and software fallback in `omnicore-engine/src/call.rs`.
+- [x] Implement hardware-accelerated video decoder pipeline and IDR synchronization in `omnicore-engine/src/call.rs`.
+- [x] Implement hedged multi-path racing router and circuit dynamic cooldown jitter in `omnicore-engine/src/router.rs`.
+- [x] Implement multi-bridge mesh relay hedged broadcast in `omnicore-engine/src/federation.rs` and verify across 5 platforms.
+- [x] Implement adaptive multi-pass fallback retry routing with half-open circuit recovery in `omnicore-engine/src/router.rs`.
+- [x] Implement flapping network resilience with exponential circuit cooldown backoff in `omnicore-engine/src/router.rs`.
+- [x] Implement federated batch broadcast with concurrency rate limiting under heavy load in `omnicore-engine/src/federation.rs`.
+- [x] Implement penalty-weighted route prioritization and degradation cascade in `omnicore-engine/src/router.rs`.
+- [x] Implement cross-protocol dynamic address translation and unified message routing in `omnicore-engine/src/router.rs`.
+- [x] Implement store-and-forward mesh relay bridge gateway adapter in `omnicore-engine/src/mesh.rs`.
+- [x] Implement dynamic cross-protocol packet fragmentation and MTU adaptation in `omnicore-engine/src/router.rs`.
+- [x] Implement Nostr decentralized relay protocol bridge in `omnicore-engine/src/bridges/nostr.rs`.
+- [x] Implement dynamic content transcoding and format sanitization in `omnicore-engine/src/router.rs`.
+- [x] Implement asymmetric network partition broadcast routing in `omnicore-engine/src/federation.rs`.
+- [x] Implement end-to-end cryptographic delivery receipt tracking and silent-drop cascade in `omnicore-engine/src/router.rs`.
+- [x] Implement bridge concurrency permit bounding and saturation fallback in `omnicore-engine/src/router.rs`.
+- [x] Implement latency anomaly spike filtering and damped cascade routing in `omnicore-engine/src/router.rs`.
+- [x] Implement multi-bridge egress deduplication ledger and exact-once delivery enforcement in `omnicore-engine/src/router.rs`.

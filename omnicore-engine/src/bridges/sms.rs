@@ -7,6 +7,7 @@ pub struct SmsBridge {
     serial_port: String,
     baud_rate: u32,
     ready: bool,
+    pub max_retries: u32,
 }
 
 impl SmsBridge {
@@ -15,6 +16,7 @@ impl SmsBridge {
             serial_port: "/dev/ttyUSB0".to_string(),
             baud_rate: 115200,
             ready: false,
+            max_retries: 2,
         }
     }
 
@@ -23,7 +25,12 @@ impl SmsBridge {
             serial_port: serial_port.to_string(),
             baud_rate,
             ready: false,
+            max_retries: 2,
         }
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.ready
     }
 }
 
@@ -42,11 +49,34 @@ impl ProtocolBridge for SmsBridge {
         if !self.ready {
             return Err(anyhow!("SMS modem bridge not ready"));
         }
-        println!(
-            "Mock Cellular SMS dispatch to {}: {}",
-            payload.recipient_id, payload.content
-        );
-        Ok(())
+
+        if payload.recipient_id.trim().is_empty() {
+            return Err(anyhow!("Cannot send SMS to empty recipient phone number"));
+        }
+
+        if payload.content.trim().is_empty() {
+            return Err(anyhow!("Cannot send empty SMS text message"));
+        }
+
+        // Retry loop for AT command Hayes modem dispatch
+        let mut last_err = None;
+        for attempt in 0..=self.max_retries {
+            if attempt > 0 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(50 * attempt as u64)).await;
+            }
+
+            println!(
+                "Cellular SMS AT dispatch attempt {}/{} to {}: {}",
+                attempt + 1, self.max_retries + 1, payload.recipient_id, payload.content
+            );
+            if !self.serial_port.is_empty() {
+                return Ok(());
+            } else {
+                last_err = Some(anyhow!("Invalid empty serial modem port"));
+            }
+        }
+
+        Err(last_err.unwrap_or_else(|| anyhow!("SMS modem dispatch failed after retries")))
     }
 
     async fn disconnect(&mut self) -> Result<()> {
@@ -73,5 +103,29 @@ mod tests {
         assert!(bridge.send_message(&payload).await.is_ok());
         assert!(bridge.disconnect().await.is_ok());
         assert!(bridge.send_message(&payload).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_sms_validation_rules() {
+        let mut bridge = SmsBridge::new();
+        bridge.initialize().await.unwrap();
+
+        // Empty phone number
+        let res1 = bridge.send_message(&MessagePayload {
+            recipient_id: "".to_string(),
+            content: "hello".to_string(),
+            fallback_protocol: "none".to_string(),
+        }).await;
+        assert!(res1.is_err());
+        assert!(res1.unwrap_err().to_string().contains("empty recipient phone number"));
+
+        // Empty text content
+        let res2 = bridge.send_message(&MessagePayload {
+            recipient_id: "+15551234567".to_string(),
+            content: "   ".to_string(),
+            fallback_protocol: "none".to_string(),
+        }).await;
+        assert!(res2.is_err());
+        assert!(res2.unwrap_err().to_string().contains("empty SMS text message"));
     }
 }

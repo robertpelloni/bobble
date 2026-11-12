@@ -151,6 +151,110 @@ impl ChannelEvent {
     }
 }
 
+/// Ledger tracking member-by-member acknowledgment receipts and delivery status across multi-bridge mesh broadcasts.
+#[derive(Debug, Clone, Default)]
+pub struct FederatedDeliveryLedger {
+    delivered_members: HashMap<String, (ProtocolKind, u64)>, // member_id -> (protocol, delivery_timestamp)
+    failed_members: HashMap<String, Vec<ProtocolKind>>,       // member_id -> attempted failed protocols
+}
+
+impl FederatedDeliveryLedger {
+    pub fn new() -> Self {
+        Self {
+            delivered_members: HashMap::new(),
+            failed_members: HashMap::new(),
+        }
+    }
+
+    pub fn mark_delivered(&mut self, member_id: &str, protocol: ProtocolKind, timestamp: u64) {
+        self.delivered_members.insert(member_id.to_string(), (protocol, timestamp));
+        self.failed_members.remove(member_id);
+    }
+
+    pub fn record_failure(&mut self, member_id: &str, protocol: ProtocolKind) {
+        self.failed_members
+            .entry(member_id.to_string())
+            .or_default()
+            .push(protocol);
+    }
+
+    pub fn is_delivered(&self, member_id: &str) -> bool {
+        self.delivered_members.contains_key(member_id)
+    }
+
+    pub fn delivered_count(&self) -> usize {
+        self.delivered_members.len()
+    }
+
+    pub fn pending_or_failed_members<'a>(&self, all_members: impl Iterator<Item = &'a String>) -> Vec<String> {
+        all_members
+            .filter(|&m| !self.is_delivered(m))
+            .cloned()
+            .collect()
+    }
+}
+
+/// Record specifying a dynamic protocol bridge handover migration for a federated channel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FederatedChannelBridgeHandover {
+    pub handover_id: String,
+    pub channel_id: String,
+    pub initiator_id: String,
+    pub from_protocol: ProtocolKind,
+    pub to_protocol: ProtocolKind,
+    pub fallback_protocols: Vec<ProtocolKind>,
+    pub reason: String,
+    pub timestamp_sec: u64,
+    pub public_key: Option<String>,
+    pub signature: Option<String>,
+}
+
+impl FederatedChannelBridgeHandover {
+    pub fn compute_digest(&self) -> String {
+        let canonical = format!(
+            "{}:{}:{}:{:?}:{:?}:{}",
+            self.handover_id,
+            self.channel_id,
+            self.initiator_id,
+            self.from_protocol,
+            self.to_protocol,
+            self.timestamp_sec
+        );
+        let mut hash: u128 = 0xcbf29ce484222325;
+        for byte in canonical.as_bytes() {
+            hash ^= *byte as u128;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        format!("{:032x}", hash)
+    }
+
+    pub fn sign(&mut self, pubkey: &str, privkey_sim: &str) {
+        self.public_key = Some(pubkey.to_string());
+        let digest = self.compute_digest();
+        let payload = format!("{}:{}", digest, privkey_sim);
+        let mut hash: u128 = 0xcbf29ce484222325;
+        for byte in payload.as_bytes() {
+            hash ^= *byte as u128;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        self.signature = Some(format!("{:032x}", hash));
+    }
+
+    pub fn verify_signature(&self, privkey_sim: &str) -> bool {
+        if self.public_key.is_none() || self.signature.is_none() {
+            return false;
+        }
+        let digest = self.compute_digest();
+        let payload = format!("{}:{}", digest, privkey_sim);
+        let mut hash: u128 = 0xcbf29ce484222325;
+        for byte in payload.as_bytes() {
+            hash ^= *byte as u128;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        self.signature.as_deref() == Some(&format!("{:032x}", hash))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FederatedChannel {
     pub channel_id: String,
@@ -159,6 +263,9 @@ pub struct FederatedChannel {
     pub members: HashMap<String, ChannelMember>,
     pub clock: VectorClock,
     pub event_history: Vec<ChannelEvent>,
+    pub active_bridge: Option<ProtocolKind>,
+    pub active_fallbacks: Vec<ProtocolKind>,
+    pub bridge_handovers: Vec<FederatedChannelBridgeHandover>,
 }
 
 impl FederatedChannel {
@@ -189,7 +296,29 @@ impl FederatedChannel {
             members,
             clock,
             event_history: Vec::new(),
+            active_bridge: None,
+            active_fallbacks: Vec::new(),
+            bridge_handovers: Vec::new(),
         }
+    }
+
+    /// Ratifies a protocol bridge handover proposed by an authorized admin member.
+    pub fn apply_bridge_handover(&mut self, handover: FederatedChannelBridgeHandover) -> Result<()> {
+        let member = self
+            .members
+            .get(&handover.initiator_id)
+            .ok_or_else(|| anyhow!("Handover initiator is not a member of the channel"))?;
+
+        if member.role != "admin" {
+            return Err(anyhow!("Only channel admins can authorize bridge handovers"));
+        }
+
+        self.active_bridge = Some(handover.to_protocol);
+        self.active_fallbacks = handover.fallback_protocols.clone();
+        self.clock.increment(&handover.initiator_id);
+        self.bridge_handovers.push(handover);
+
+        Ok(())
     }
 
     /// Author and post a new message from a local channel member.
@@ -328,6 +457,110 @@ impl FederationManager {
 
             let (chosen, state) = router.route_with_cascade(&payload, primary_proto, fallback_protos).await?;
             results.push((member_id.clone(), chosen, state));
+        }
+
+        Ok(results)
+    }
+
+    /// Ratifies a dynamic bridge handover migration across a federated channel, updating its primary
+    /// and fallback bridges and recording vector clock advancement.
+    pub fn handover_channel_bridge(
+        &mut self,
+        channel_id: &str,
+        handover: FederatedChannelBridgeHandover,
+        privkey_sim: &str,
+    ) -> Result<()> {
+        if !handover.verify_signature(privkey_sim) {
+            return Err(anyhow!("Invalid handover signature: authentication check failed"));
+        }
+
+        let channel = self
+            .channels
+            .get_mut(channel_id)
+            .ok_or_else(|| anyhow!("Channel not found"))?;
+
+        channel.apply_bridge_handover(handover)
+    }
+
+    /// Broadcasts an event to remote channel members using the channel's dynamically migrated active bridge.
+    pub async fn broadcast_event_with_bridge_handover(
+        &self,
+        channel_id: &str,
+        event: &ChannelEvent,
+        router: &MultipathRouter,
+    ) -> Result<Vec<(String, ProtocolKind, DeliveryState)>> {
+        let channel = self.channels.get(channel_id).ok_or_else(|| anyhow!("Channel not found"))?;
+
+        let primary_bridge = channel.active_bridge.ok_or_else(|| {
+            anyhow!("Channel has no active bridge configured; perform bridge handover first")
+        })?;
+
+        let mut results = Vec::new();
+        for (member_id, _) in &channel.members {
+            if member_id == &event.author_id {
+                continue; // Do not echo back to author
+            }
+
+            let payload = MessagePayload {
+                recipient_id: member_id.clone(),
+                content: format!("[HandoverBridge:{}] {}", channel.name, event.payload),
+                fallback_protocol: channel
+                    .active_fallbacks
+                    .first()
+                    .map(|p| p.as_str().to_string())
+                    .unwrap_or_default(),
+            };
+
+            let (chosen, state) = router
+                .route_with_cascade(&payload, primary_bridge, &channel.active_fallbacks)
+                .await?;
+            results.push((member_id.clone(), chosen, state));
+        }
+
+        Ok(results)
+    }
+
+    /// Broadcasts an event using a FederatedDeliveryLedger to avoid duplicate deliveries to already-confirmed
+    /// members and selectively retrying pending members across alternate protocol bridges.
+    pub async fn broadcast_event_with_delivery_ledger(
+        &self,
+        channel_id: &str,
+        event: &ChannelEvent,
+        router: &MultipathRouter,
+        ledger: &mut FederatedDeliveryLedger,
+        primary_proto: ProtocolKind,
+        fallback_protos: &[ProtocolKind],
+        now_epoch: u64,
+    ) -> Result<Vec<(String, ProtocolKind, DeliveryState)>> {
+        let channel = self.channels.get(channel_id).ok_or_else(|| anyhow!("Channel not found"))?;
+        let mut results = Vec::new();
+
+        for (member_id, _) in &channel.members {
+            if member_id == &event.author_id {
+                continue; // Do not echo back to author
+            }
+
+            // Skip if this member has already confirmed delivery in the ledger
+            if ledger.is_delivered(member_id) {
+                continue;
+            }
+
+            let payload = MessagePayload {
+                recipient_id: member_id.clone(),
+                content: format!("[LedgerRelay:{}] {}", channel.name, event.payload),
+                fallback_protocol: fallback_protos.first().map(|p| p.as_str().to_string()).unwrap_or_default(),
+            };
+
+            match router.route_with_cascade(&payload, primary_proto, fallback_protos).await {
+                Ok((chosen, state)) => {
+                    ledger.mark_delivered(member_id, chosen, now_epoch);
+                    results.push((member_id.clone(), chosen, state));
+                }
+                Err(err) => {
+                    ledger.record_failure(member_id, primary_proto);
+                    eprintln!("Delivery to member [{}] failed across candidate bridges: {}", member_id, err);
+                }
+            }
         }
 
         Ok(results)
@@ -680,5 +913,175 @@ mod tests {
                 _ => panic!("Expected FallbackTriggered to Matrix"),
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_federated_channel_bridge_handover_migration() {
+        use crate::bridge::ProtocolBridge;
+        use crate::bridges::matrix::MatrixBridge;
+        use crate::router::BridgeRegistry;
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+
+        let mut mgr = FederationManager::new();
+        mgr.create_channel("chan_handover_test", "Handover Room", "Dynamic Bridge Migration", "alice");
+
+        // Bob joins as member
+        let chan = mgr.get_channel_mut("chan_handover_test").unwrap();
+        let mut bob_clk = VectorClock::new();
+        bob_clk.increment("bob");
+        chan.apply_event(ChannelEvent {
+            event_id: "ev_bob_join".to_string(),
+            channel_id: "chan_handover_test".to_string(),
+            author_id: "bob".to_string(),
+            event_type: "member_join".to_string(),
+            payload: "Bob joins".to_string(),
+            clock: bob_clk,
+            timestamp: 1000,
+            public_key: None,
+            signature: None,
+        }).unwrap();
+
+        // 1. Non-admin (bob) attempts handover -> rejected
+        let mut bob_handover = FederatedChannelBridgeHandover {
+            handover_id: "ho_unauthorized".to_string(),
+            channel_id: "chan_handover_test".to_string(),
+            initiator_id: "bob".to_string(),
+            from_protocol: ProtocolKind::Signal,
+            to_protocol: ProtocolKind::Matrix,
+            fallback_protocols: vec![],
+            reason: "Malicious takeover attempt".to_string(),
+            timestamp_sec: 1100,
+            public_key: None,
+            signature: None,
+        };
+        bob_handover.sign("bob_pub", "bob_secret");
+        assert!(mgr.handover_channel_bridge("chan_handover_test", bob_handover, "bob_secret").is_err());
+
+        // 2. Admin (alice) proposes handover from Signal to Matrix
+        let mut alice_handover = FederatedChannelBridgeHandover {
+            handover_id: "ho_authorized_001".to_string(),
+            channel_id: "chan_handover_test".to_string(),
+            initiator_id: "alice".to_string(),
+            from_protocol: ProtocolKind::Signal,
+            to_protocol: ProtocolKind::Matrix,
+            fallback_protocols: vec![ProtocolKind::Signal],
+            reason: "Signal daemon down; migrating channel to Matrix".to_string(),
+            timestamp_sec: 1200,
+            public_key: None,
+            signature: None,
+        };
+        alice_handover.sign("alice_pub", "alice_secret");
+        mgr.handover_channel_bridge("chan_handover_test", alice_handover, "alice_secret")
+            .expect("Admin bridge handover should succeed");
+
+        // Verify channel state updated
+        let chan = mgr.get_channel("chan_handover_test").unwrap();
+        assert_eq!(chan.active_bridge, Some(ProtocolKind::Matrix));
+        assert_eq!(chan.active_fallbacks, vec![ProtocolKind::Signal]);
+        assert_eq!(chan.bridge_handovers.len(), 1);
+
+        // 3. Broadcast message using migrated bridge
+        let mut registry = BridgeRegistry::new();
+        let mut matrix = MatrixBridge::new();
+        let _ = <MatrixBridge as ProtocolBridge>::initialize(&mut matrix).await;
+        registry.register(ProtocolKind::Matrix, Box::new(matrix));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+
+        let chan_mut = mgr.get_channel_mut("chan_handover_test").unwrap();
+        let mut msg_ev = chan_mut.post_message("alice", "Hello on the migrated Matrix bridge!").unwrap();
+        msg_ev.sign("alice_pub", "alice_secret");
+
+        let delivery = mgr
+            .broadcast_event_with_bridge_handover("chan_handover_test", &msg_ev, &router)
+            .await
+            .expect("Broadcast via migrated handover bridge should succeed");
+
+        assert_eq!(delivery.len(), 1);
+        assert_eq!(delivery[0].0, "bob");
+        assert_eq!(delivery[0].1, ProtocolKind::Matrix);
+        assert_eq!(delivery[0].2, DeliveryState::Delivered);
+    }
+
+    #[tokio::test]
+    async fn test_broadcast_event_with_delivery_ledger_deduplication_and_retry() {
+        use crate::bridge::ProtocolBridge;
+        use crate::bridges::matrix::MatrixBridge;
+        use crate::bridges::signal::SignalBridge;
+        use crate::router::BridgeRegistry;
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+
+        let mut mgr = FederationManager::new();
+        mgr.create_channel("chan_ledger_test", "Ledger Room", "Delivery Ledger Tracking", "alice");
+
+        let chan = mgr.get_channel_mut("chan_ledger_test").unwrap();
+        for &peer in &["bob", "charlie"] {
+            let mut clk = VectorClock::new();
+            clk.increment(peer);
+            chan.apply_event(ChannelEvent {
+                event_id: format!("ev_join_{}", peer),
+                channel_id: "chan_ledger_test".to_string(),
+                author_id: peer.to_string(),
+                event_type: "member_join".to_string(),
+                payload: format!("{} joined", peer),
+                clock: clk,
+                timestamp: 1000,
+                public_key: None,
+                signature: None,
+            }).unwrap();
+        }
+
+        let mut registry = BridgeRegistry::new();
+        // Signal bridge: uninitialized (fails)
+        let signal = SignalBridge::new();
+        registry.register(ProtocolKind::Signal, Box::new(signal));
+
+        // Matrix bridge: initialized (succeeds)
+        let mut matrix = MatrixBridge::new();
+        let _ = <MatrixBridge as ProtocolBridge>::initialize(&mut matrix).await;
+        registry.register(ProtocolKind::Matrix, Box::new(matrix));
+
+        let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
+        let mut ledger = FederatedDeliveryLedger::new();
+
+        let chan_mut = mgr.get_channel_mut("chan_ledger_test").unwrap();
+        let msg = chan_mut.post_message("alice", "Multi-party ledger broadcast").unwrap();
+
+        // 1. First broadcast pass: cascades from Signal to Matrix, records both bob and charlie in ledger
+        let res1 = mgr
+            .broadcast_event_with_delivery_ledger(
+                "chan_ledger_test",
+                &msg,
+                &router,
+                &mut ledger,
+                ProtocolKind::Signal,
+                &[ProtocolKind::Matrix],
+                1700000000,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res1.len(), 2);
+        assert!(ledger.is_delivered("bob"));
+        assert!(ledger.is_delivered("charlie"));
+        assert_eq!(ledger.delivered_count(), 2);
+
+        // 2. Second broadcast pass with same ledger: both peers already confirmed, zero retransmissions
+        let res2 = mgr
+            .broadcast_event_with_delivery_ledger(
+                "chan_ledger_test",
+                &msg,
+                &router,
+                &mut ledger,
+                ProtocolKind::Signal,
+                &[ProtocolKind::Matrix],
+                1700000010,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res2.len(), 0); // No duplicate sends
     }
 }

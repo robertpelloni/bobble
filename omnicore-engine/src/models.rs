@@ -10,6 +10,7 @@ pub enum ProtocolKind {
     Tox,
     IMessage,
     Sms,
+    Nostr,
 }
 
 impl ProtocolKind {
@@ -22,6 +23,7 @@ impl ProtocolKind {
             Self::Tox => "Tox",
             Self::IMessage => "iMessage",
             Self::Sms => "SMS",
+            Self::Nostr => "Nostr",
         }
     }
 
@@ -34,6 +36,7 @@ impl ProtocolKind {
             "tox" => Some(Self::Tox),
             "imessage" => Some(Self::IMessage),
             "sms" => Some(Self::Sms),
+            "nostr" => Some(Self::Nostr),
             _ => None,
         }
     }

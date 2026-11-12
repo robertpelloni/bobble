@@ -37,7 +37,48 @@ Major, long-term structural milestones and structural plans.
 - Multi-target bundling (Desktop + Android + iOS) with automated packaging pipeline (`scripts/bundle.sh`).
 - Mobile daemon settings, Tor SOCKS5 proxy, and cryptographic identity pairing.
 
-## Milestone 5: Production Hardening, Key Ratchets & Native Performance (In Progress)
-- Double Ratchet session persistence and X3DH pre-key bundles (`ratchet.rs`).
-- WebSocket IPC daemon server (`server.rs`).
-- Cross-platform federation and multi-tier cascade routing (`router.rs`, `federation.rs`).
+## Milestone 5: Production Hardening, Key Ratchets & Native Performance (Completed)
+- Double Ratchet session persistence and X3DH pre-key bundles in SQLCipher key_store (`ratchet.rs`).
+- WebSocket IPC daemon server with session-targeted event broadcasting (`server.rs`).
+- Cross-platform federation and multi-tier cascade routing with circuit breakers (`router.rs`, `federation.rs`).
+- Matrix and Discord bridge delivery reliability and retry loops (`bridges/`).
+
+## Milestone 6: Autonomous Hardware Appliance & Mesh Expansion (In Progress)
+- [x] Standalone compute module appliance telemetry evaluation with automated cellular LTE failover and safe shutdown policies (`telemetry.rs`).
+- [x] Multi-hop P2P mesh announcement format with hop limit decrement and transport tagging (`MeshTransportType`).
+- [x] In-memory neighbor peer discovery caching (`PeerDiscovery::cache_peer`, `get_cached_peers`).
+- [x] Multi-hop store-and-forward mesh packet relay across BLE and Wi-Fi Direct transports (`mesh.rs`).
+- [x] BLE background GATT service and Wi-Fi Direct socket daemon coordinator (`MeshTransportDaemon` in `mesh.rs`).
+- [ ] Physical Bluetooth HCI adapter binding and Android Wi-Fi P2P JNI drivers.
+- [x] End-to-end audio/video call aggregation across WebRTC, Matrix VoIP, and Discord voice gateways (`call.rs`).
+- [x] Multi-bridge optimal cascade execution with automated circuit-breaker bypass and metric updates (`router.rs`).
+- [x] Starvation prevention and dynamic probe discovery across candidate bridges (`router.rs`).
+- [x] Cryptographic payload digest integrity verification during cascading fallbacks (`router.rs`).
+- [x] Cryptographic replay attack protection and nonce caching across cascading routes (`router.rs`).
+- [x] Protocol bridge reliability hardening across iMessage and SMS Hayes AT modem drivers (`bridges/`).
+- [x] Real-time bridge health diagnostics and anomaly detection for routing latency spikes and circuit locks (`telemetry.rs`).
+- [x] Advanced RTP jitter buffer with sequence reordering and packet loss concealment pipeline (`call.rs`).
+- [x] Native WebRTC audio track encoding and dynamic bit-rate adaptation (`call.rs`).
+- [x] Video track simulcast and VP8/VP9 temporal layer switching (`VideoSimulcastController` in `call.rs`).
+- [x] End-to-end encrypted screen sharing stream pipeline (`ScreenSharePipeline` in `call.rs`).
+- [x] Hardware-accelerated zero-copy video frame buffer pool and format grabber (`VideoFramePool` in `call.rs`).
+- [x] Dynamic spatial downsampling and color conversion pipeline (`VideoColorConverter` in `call.rs`).
+- [x] Hardware-accelerated VAAPI/VideoToolbox encoder backend drivers (`HardwareVideoEncoder` in `call.rs`).
+- [x] Hardware-accelerated NVDEC/V4L2 hardware video decoder pipeline (`HardwareVideoDecoder` in `call.rs`).
+- [x] Hedged multi-path racing router (`route_hedged_racing`) with tail-latency hedging cutoff and circuit breaker dynamic cooldown jitter (`router.rs`).
+- [x] Multi-bridge mesh relay hedged broadcast across federated multi-platform channels (`broadcast_event_via_hedged_racing` in `federation.rs`).
+- [x] Adaptive multi-pass fallback retry router (`route_with_adaptive_fallback_retry` in `router.rs`).
+- [x] Flapping network resilience with exponential circuit cooldown backoff (`route_with_flapping_resilience` in `router.rs`).
+- [x] Federated batch event broadcast with concurrency rate limiting under heavy load (`broadcast_batch_events_via_router` in `federation.rs`).
+- [x] Penalty-weighted route selection and proactive degradation avoidance (`route_with_penalty_weighted_cascade` in `router.rs`).
+- [x] Cross-protocol address book translation and unified contact routing (`route_unified_message` in `router.rs`).
+- [x] Store-and-forward mesh relay bridge gateway adapter (`MeshRelayBridgeAdapter` in `mesh.rs`).
+- [x] Dynamic cross-protocol packet fragmentation and MTU adaptation (`route_with_fragmentation_adaptive_cascade` in `router.rs`).
+- [x] Nostr censorship-resistant relay bridge (`NostrBridge` in `bridges/nostr.rs`).
+- [x] Cross-protocol content transcoding and format sanitization (`route_with_transcoding_cascade` in `router.rs`).
+- [x] Asymmetric network partition resilient broadcasting (`broadcast_event_with_partition_resilience` in `federation.rs`).
+- [x] End-to-end cryptographic delivery receipt tracking and silent-drop cascade (`route_with_confirmed_receipt` in `router.rs`).
+- [x] Bridge concurrency permit bounding and saturation-aware fallback cascade (`route_with_concurrency_bounded_cascade` in `router.rs`).
+- [x] Route anomaly latency spike filtering and damped cascade routing (`route_with_anomaly_damped_cascade` in `router.rs`).
+- [x] Multi-bridge egress deduplication ledger and exact-once delivery enforcement (`route_with_exact_once_deduplication` in `router.rs`).
+- [ ] Full Milestone 6 verification and multi-node hardware test suite.

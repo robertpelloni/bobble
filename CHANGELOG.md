@@ -2,6 +2,108 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 1.0.4:
+  - Silent Delivery Drop Canary Detector: Implemented `CanaryDropDetector` and `MultipathRouter::route_with_canary_drop_detection` in `omnicore-engine/src/router.rs`. Emits non-disruptive canary challenge nonces prior to candidate bridge message dispatches to proactively detect silent packet drops, ISP blackholing, or gateway drops, immediately triggering fallback cascades.
+- 1.0.3:
+  - Dynamic Latency Window & Percentile-Bounded Routing: Implemented `RouteLatencyEstimator` and `MultipathRouter::route_with_percentile_bounded_cascade` in `omnicore-engine/src/router.rs`. Computes moving p50/p95 latency percentiles over a sliding window per candidate bridge and triggers early timeout cascades when an attempt exceeds historical p95 latency envelopes, eliminating tail-latency stalls and socket hangs.
+- 1.0.2:
+  - Federated Multi-Party Delivery Ledger: Implemented `FederatedDeliveryLedger` and `FederationManager::broadcast_event_with_delivery_ledger` in `omnicore-engine/src/federation.rs`. Tracks member-by-member acknowledgment receipts and per-recipient fallback cascade history across multi-bridge mesh broadcasts, selectively retrying unacknowledged members across alternate protocol bridges while avoiding duplicate retransmissions to already-confirmed peers.
+- 1.0.1:
+  - Route Dispersal Balancer: Implemented `RouteDispersalBalancer` and `MultipathRouter::route_with_dispersal_balancing` in `omnicore-engine/src/router.rs`. Distributes outbound messages across healthy candidate bridges to prevent modem serial contention, single-transport queue bottlenecks, and provider rate-limiting.
+- 1.0.0:
+  - Federated Channel Dynamic Bridge Handover: Implemented `FederatedChannelBridgeHandover`, `handover_channel_bridge`, and `broadcast_event_with_bridge_handover` on `FederationManager` in `omnicore-engine/src/federation.rs`. Allows authorized admin members to migrate active federated group channels to alternative protocol bridges with cryptographic signature verification and vector clock causal continuity.
+- 0.9.9:
+  - Circuit Auto-Reset & Backoff Decay Engine: Implemented `decay_trips_if_stable`, `rehabilitate_stable_circuits`, and `route_with_rehabilitated_circuits` in `omnicore-engine/src/router.rs`. Gradually decrements historical flapping trip counts and effective cooldown penalties for candidate bridges that maintain uninterrupted stability during configured observation windows, rehabilitating degraded transports without manual intervention.
+- 0.9.8:
+  - Sliding-Window Bandwidth Quota & Traffic Shaper: Implemented `RouteBandwidthShaper` and `MultipathRouter::route_with_bandwidth_throttled_cascade` in `omnicore-engine/src/router.rs`. Monitors per-transport byte consumption over sliding time windows (60s default) and prevents overages on metered channels (cellular SMS 2KB budget) by automatically triggering graceful fallback to unmetered bridges (Matrix, Signal).
+- 0.9.7:
+  - Cross-Protocol Route Cost & QoS Optimizer: Implemented `RouteCostOptimizer`, `QosRoutingPreference`, and `MultipathRouter::route_with_cost_and_qos_optimization` in `omnicore-engine/src/router.rs`. Dynamically prioritizes routes balancing financial transit cost (e.g. favoring zero-cost internet/Matrix over metered cellular SMS), battery drain profiles (favoring low-power Wi-Fi/mesh over high-power cellular transmitters), and emergency low-latency requirements.
+- 0.9.6:
+  - Multi-Bridge Active Health Probing & Heartbeat Keepalive: Implemented `BridgeHeartbeatProber` and `probe_and_recover_circuits`, `route_with_active_health_probing` in `omnicore-engine/src/router.rs`. Actively probes degraded, open, or half-open bridges using lightweight synthetic heartbeat pings (`PING:<nonce>`) to verify network viability, automatically transitioning recovering circuits back to `Closed` status and decrementing flapping trip counters upon success.
+- 0.9.5:
+  - Multi-Bridge Egress Deduplication Ledger: Implemented `EgressDeduplicationLedger` and `route_with_exact_once_deduplication` in `omnicore-engine/src/router.rs`. Tracks outbound message digests and recipient tuples across a sliding time window (120s default) to guarantee exact-once delivery semantics during rapid failover cascades and eliminate multi-bridge duplicate message storms.
+- 0.9.4:
+  - Latency Anomaly Spike Filter & Damped Routing: Implemented `RouteAnomalyFilter` and `route_with_anomaly_damped_cascade` in `omnicore-engine/src/router.rs`. Clamps single-packet jitter outliers (>4x baseline) using smoothed Exponential Moving Averages (EMA) to prevent transient latency anomalies from poisoning bridge health metrics and triggering premature circuit-tripping.
+- 0.9.3:
+  - Bridge Concurrency Guard & Saturation-Aware Fallback: Implemented `BridgeConcurrencyGuard` and `route_with_concurrency_bounded_cascade` in `omnicore-engine/src/router.rs`. Dynamically bounds concurrent in-flight dispatch operations per protocol (e.g. limiting serial cellular SMS to 2 concurrent operations) and immediately cascades to unsaturated alternate candidate bridges to preserve throughput and prevent modem lockups.
+- 0.9.2:
+  - Cryptographic Delivery Acknowledgment & Silent-Drop Cascade: Implemented `DeliveryReceipt`, `ReceiptTracker`, and `route_with_confirmed_receipt` in `omnicore-engine/src/router.rs`. Verifies cryptographic recipient receipts before finalizing delivery; detects silent packet drops and immediately triggers fallback cascades when acknowledgment deadlines expire.
+- 0.9.1:
+  - Asymmetric Partition Resilience & Disjoint Route Broadcasting: Implemented `broadcast_event_with_partition_resilience` on `FederationManager` in `omnicore-engine/src/federation.rs`. Dispatches signed multi-party channel events across asymmetric network partitions using custom per-peer protocol preferences and multi-tier fallback chains to deliver to isolated peers (Matrix, Nostr, cellular SMS) without vector clock corruption.
+- 0.9.0:
+  - Cross-Protocol Content Transcoding & Sanitization: Implemented `PayloadContentTranscoder` and `route_with_transcoding_cascade` in `omnicore-engine/src/router.rs`. Automatically strips markdown, formatting artifacts, and special unicode entities into plain-text ASCII when cascading from rich web bridges (Matrix, Discord) to restricted cellular SMS transports.
+- 0.8.9:
+  - Nostr Protocol Bridge & Multi-Path Relay: Implemented `NostrBridge` in `omnicore-engine/src/bridges/nostr.rs` and added `ProtocolKind::Nostr` in `omnicore-engine/src/models.rs`. Provides censorship-resistant message transmission across WebSocket relay pools (NIP-01, NIP-04 encrypted DMs) with Schnorr key validation. Added integration test verifying multi-path cascade failover from Nostr relays to Matrix homeservers.
+- 0.8.8:
+  - Cross-Protocol Packet Fragmentation & MTU Adaptor: Implemented `ProtocolMtuLimits`, `PayloadFragmenter`, and `route_with_fragmentation_adaptive_cascade` in `omnicore-engine/src/router.rs`. Automatically splits oversized message payloads into sequence-numbered, checksum-validated chunks when cascading to constrained transports (such as Cellular SMS with 140-char MTU or Tox P2P MTU constraints), tracking multi-part delivery states.
+- 0.8.7:
+  - Mesh Relay Bridge Gateway Adapter: Implemented `MeshRelayBridgeAdapter` in `omnicore-engine/src/mesh.rs`. Connects local P2P store-and-forward mesh topologies (BLE Mesh, Wi-Fi Direct) with external internet protocol bridges via `MultipathRouter::route_with_cascade`, allowing partitioned or offline mesh nodes to seamlessly egress messages through gateway nodes to internet and cellular networks.
+- 0.8.6:
+  - Cross-Protocol Recipient Translation & Unified Routing: Implemented `CrossProtocolAddressBook` and `route_unified_message` in `omnicore-engine/src/router.rs`. Automatically translates high-level unified contact identities to protocol-native destination addresses (Signal E.164, Matrix user ID, Discord channel ID, SMS number) at each fallback stage of a cascading dispatch.
+- 0.8.5:
+  - Penalty-Weighted Route Selection & Cascade: Implemented `calculate_route_penalty_score` on `ProtocolMetric` and `select_penalty_weighted_route` on `BridgeRegistry` in `omnicore-engine/src/router.rs`. Computes unified degradation scores combining EWMA latency, failure multipliers, and tripping counts to proactively deprioritize degraded bridges prior to open circuit failure. Added `route_with_penalty_weighted_cascade` on `MultipathRouter`.
+- 0.8.4:
+  - Federated Batch Broadcast & Rate-Limiting Mitigation: Implemented `broadcast_batch_events_via_router` on `FederationManager` in `omnicore-engine/src/federation.rs`. Enables high-throughput batched event propagation across decentralized multi-party group channels with concurrency chunk bounding to prevent per-bridge rate-limiting and socket exhaustion under heavy load.
+  - Stress Testing Under Heavy Load: Added integration stress test verifying burst delivery of 50 signed event packets across 10 member peers with automated fallback routing from Signal to Matrix.
+- 0.8.3:
+  - Flapping Network Resilience & Exponential Cooldown Backoff: Implemented `consecutive_trips` tracking and `compute_effective_cooldown` on `ProtocolMetric` in `omnicore-engine/src/router.rs`, introducing exponential backoff with dynamic jitter to circuit-breaker cooldown periods under repeated network disconnects. Added `route_with_flapping_resilience` on `MultipathRouter` to bypass unstable flapping candidate bridges in favor of reliable low-tier fallbacks (e.g., cellular SMS).
+- 0.8.2:
+  - Adaptive Fallback Retry Router: Implemented `route_with_adaptive_fallback_retry` on `MultipathRouter` in `omnicore-engine/src/router.rs`. Dynamically re-evaluates candidate health, promotes recovering half-open circuit breakers across multiple execution passes, and ensures delivery resilience under intermittent network disruptions.
+- 0.8.1:
+  - Multi-Bridge Mesh Relay Hedged Broadcast: Implemented `broadcast_event_via_hedged_racing` on `FederationManager` in `omnicore-engine/src/federation.rs`. Enables concurrent racing of primary and fallback candidate bridges across decentralized multi-party group channels with cryptographic signature preservation and causal vector clock synchronization.
+  - Multi-Platform Fallback Stress Testing: Added integration stress test verifying simultaneous hedged racing across 5 distinct platform bridge members (Signal, Matrix, Discord, Tox, SMS) under primary link failure.
+- 0.8.0:
+  - Hedged Multi-Path Racing & Cooldown Jitter: Implemented `HedgedRoutingPolicy` and `route_hedged_racing` on `MultipathRouter` in `omnicore-engine/src/router.rs`. Races candidate bridges concurrently or with a configurable tail-latency cutoff (`hedge_delay_ms`), returning as soon as the fastest bridge confirms delivery to eliminate tail latency spikes during packet loss. Added `with_jitter` to `ProtocolMetric` to stagger circuit breaker cooldowns and prevent thundering herd reconnection storms across flapping network interfaces.
+- 0.7.9:
+  - Hardware Video Decoder & NALU Stream Reassembly: Implemented `HardwareDecoderType` (V4l2m2m, Nvdec, VideoToolbox, SoftwareOpenH264), `DecoderConfig`, and `HardwareVideoDecoder` in `omnicore-engine/src/call.rs`. Provides IDR keyframe synchronization and reconstructs uncompressed `RawVideoFrame` buffers from H.264 NALUs with automatic software fallback.
+- 0.7.8:
+  - Cryptographic Replay Protection & Recipient Binding: Implemented `RoutedPacketEnvelope`, `NonceReplayCache`, and `route_with_replay_and_integrity_guard` in `omnicore-engine/src/router.rs`. Guards against replay attacks and ensures message payload integrity across cascading multi-protocol routes.
+- 0.7.7:
+  - Hardware Video Encoder & H.264 NALU Packetization: Implemented `HardwareEncoderType` (Vaapi, VideoToolbox, Nvenc, SoftwareOpenH264), `EncoderConfig`, `EncodedNalu`, and `HardwareVideoEncoder` in `omnicore-engine/src/call.rs`. Provides zero-copy frame compression into H.264 NALUs with automatic software fallback when hardware accelerators are unavailable.
+- 0.7.6:
+  - Video Spatial Downsampling & YUV Color Conversion: Implemented `VideoColorConverter` in `omnicore-engine/src/call.rs`. Adds bilinear box downsampling (`downsample_rgba`) and ITU-R BT.601 color space transformation (`rgba_to_i420`) to feed multi-layer video simulcast streaming.
+- 0.7.5:
+  - Zero-Copy Video Frame Capture & Buffer Pool: Implemented `VideoPixelFormat` (I420, NV12, RGBA32), `RawVideoFrame`, and `VideoFramePool` in `omnicore-engine/src/call.rs`. Eliminates allocation churn and GC pauses during high-fps video pipelines by recycling pre-allocated frame memory buffers.
+- 0.7.4:
+  - Cryptographic Payload Integrity Verification: Implemented `PayloadIntegrityGuard` and `route_with_integrity_check` on `MultipathRouter` in `omnicore-engine/src/router.rs`. Validates 64-bit cryptographic payload digests before and after multi-protocol cascade dispatching to prevent content tampering or truncation across diverse networks.
+- 0.7.3:
+  - End-to-End Encrypted Screen Sharing Pipeline: Implemented `ScreenShareTrack`, `ScreenFrameChunk`, and `ScreenSharePipeline` in `omnicore-engine/src/call.rs`. Provides MTU-safe frame chunking (1200 bytes default), integrity checksum verification, out-of-order chunk buffering and reassembly, and active encryption session key management.
+- 0.7.2:
+  - Video Simulcast Adaptation & Temporal Layer Switching: Implemented `VideoResolution`, `SimulcastLayer`, and `VideoSimulcastController` in `omnicore-engine/src/call.rs`. Dynamically switches spatial resolutions (1080p, 480p, 240p) and frame rates (30fps, 24fps, 15fps) based on estimated available network bandwidth and packet loss.
+- 0.7.1:
+  - Starvation Prevention & Probing Discovery: Implemented `select_optimal_route_with_probing` on `BridgeRegistry` and `route_with_starvation_prevention` on `MultipathRouter` in `omnicore-engine/src/router.rs`. Automatically promotes unattempted (starved) candidate bridges to active probe status when primary bridges experience latency degradation.
+- 0.7.0:
+  - Bridge Health Diagnostics & Routing Anomaly Detection: Implemented `RoutingAnomaly` and `BridgeHealthMonitor` in `omnicore-engine/src/telemetry.rs`. Automated real-time diagnostic reporting for excessive latency spikes (>1.5s), rapid repeated failure tripping, persistent circuit breaker open locks, and route candidate starvation.
+- 0.6.9:
+  - Audio Bitrate Adaptation & Codec Profiles: Implemented `AudioCodecProfile` and `BitrateController` in `omnicore-engine/src/call.rs`. Dynamically scales Opus audio bit-rates down during packet loss (>10%) and scales up under clean network conditions, with adaptive frame packet duration (20ms/40ms) to conserve bandwidth.
+- 0.6.8:
+  - iMessage Relay & SMS Modem Hardening: Enhanced `IMessageBridge` and `SmsBridge` in `omnicore-engine/src/bridges/` with empty recipient/content input validation, connection status queries (`is_connected`, `is_ready`), and configurable retry loops. Added comprehensive iMessage-to-SMS multi-path fallback cascade integration test.
+- 0.6.7:
+  - Mesh Cache Pruning & Transport Daemon: Extended `MeshRouter` with TTL-based expiration cache (`seen_packets: HashMap<String, u64>`) and memory pruning (`prune_expired_seen`) to prevent memory leaks during long-running mesh node execution. Implemented `MeshPeerChannel` and `MeshTransportDaemon` in `omnicore-engine/src/mesh.rs` for multi-channel transport dispatching across BLE and Wi-Fi Direct.
+- 0.6.6:
+  - RTP Jitter Buffer & Packet Loss Concealment (PLC): Implemented `RtpJitterBuffer` and `JitterBufferConfig` in `omnicore-engine/src/call.rs`. Provides out-of-order packet reordering, duplicate discarding, configurable playout delay thresholds, missing sequence loss detection, and synthetic comfort-noise PLC frame generation.
+- 0.6.5:
+  - Optimal Multi-Bridge Cascade Routing & Circuit Breaker Integration: Implemented `route_with_optimal_cascade` on `MultipathRouter` in `omnicore-engine/src/router.rs`. Dynamically queries optimal candidate chains, bypasses open circuit bridges, and records real-time latency and delivery outcomes.
+- 0.6.4:
+  - Cross-Protocol Voice & Media Gateway Aggregation: Implemented `CrossProtocolCallGateway`, `CallGatewayRoute`, and `MediaPacket` in `omnicore-engine/src/call.rs`. Enabled bidirectional audio and video bridging between WebRTC, Matrix VoIP, and Discord voice sessions with packet sequence advancement and route termination lifecycle.
+- 0.6.3:
+  - Multi-Hop Mesh Store-and-Forward Packet Relay: Implemented `MeshPacket`, `MeshHeader`, `MeshRouter`, `PacketProcessingResult`, and `DropReason` in `omnicore-engine/src/mesh.rs`. Built packet deduplication, destination delivery, visited node loop detection, and decrementing store-and-forward queueing across local transports (`BleMesh`, `WifiDirect`, `UdpBroadcast`).
+- 0.6.2:
+  - Multi-Hop Mesh Propagation & Neighbor Peer Caching: Extended `omnicore-engine/src/discovery.rs` with `MeshTransportType` (`UdpBroadcast`, `BleMesh`, `WifiDirect`) and multi-hop decrement forwarding (`decrement_hop`, `hop_limit`). Implemented in-memory peer discovery cache in `PeerDiscovery` (`cache_peer`, `get_cached_peers`, `cached_peer_count`) for offline/local neighbor tracking.
+- 0.6.1:
+  - Milestone 6 Compute Module Appliance Daemon & Failover: Implemented `ApplianceConfig` and `ApplianceAction` in `omnicore-engine/src/telemetry.rs` supporting standalone 24/7 routing appliances with cellular LTE failovers and safe shutdown thresholds.
+- 0.6.0:
+  - Milestone 5 Completion & Production Release: Completed production hardening across key ratchets, WebSocket IPC event broadcasting, circuit-breaker routing, and multi-tier cascades. Updated roadmap to establish Milestone 6.
+- 0.5.9:
+  - WebSocket Server Event Broadcasting: Implemented `broadcast_event` on `WebSocketServer` in `omnicore-engine/src/server.rs` supporting channel-targeted and global real-time event distribution to connected desktop and mobile clients.
+- 0.5.8:
+  - Circuit-Breaker Fault Tolerance: Implemented `CircuitState` (Closed, Open, HalfOpen) and automated cooldown probing in `omnicore-engine/src/router.rs` to bypass failing bridges during network outages and prevent timeout cascading delays.
+- 0.5.7:
+  - Multi-Protocol Adaptive Latency Routing: Implemented `ProtocolMetric`, `record_delivery_metrics`, and `select_optimal_route` in `omnicore-engine/src/router.rs` dynamically reordering routing cascades according to real-time latency and bridge health.
+- 0.5.6:
+  - Diverse Multipath Routing Fallback Scenarios: Added integration tests for P2P Tox DHT failover to cellular SMS and SimpleX cryptographic queue failover to Matrix homeserver in `omnicore-engine/src/router.rs`.
+- 0.5.5:
+  - Ratchet State Persistence & Ephemeral Pre-Keys: Implemented `RatchetSession::persist_to_db` and `load_from_db` storing ratchet chains directly into SQLCipher `key_store`, and added `PreKeyBundle::generate_ephemeral_bundle` in `omnicore-engine/src/ratchet.rs`.
 - 0.5.4:
   - Multi-Bridge Mesh Relay Orchestration: Added integration test `test_multi_bridge_mesh_relay_broadcast` in `omnicore-engine/src/federation.rs` verifying 4-party channel state broadcasting across protocol bridges with automated fallback to Matrix and SMS.
 - 0.5.3:
