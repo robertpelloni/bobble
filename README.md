@@ -1,104 +1,31 @@
 # bobble (OmniCore)
 
-**Universal next-generation messaging client** — a modern aggregator that unifies every messaging platform into a single cohesive desktop and mobile experience: Signal, Simplex, Matrix, Tox, Discord, iMessage, and SMS — with no platform treated as second-class, featuring intelligent multi-path fallback routing across networks.
+A messaging aggregator that aims to unify multiple platforms — Signal, SimpleX, Matrix, Tox, Discord, iMessage, and SMS — into a single desktop and mobile client, with multi-path fallback routing across networks (e.g. Signal → Matrix → SMS).
 
----
+## Status
 
-## Architecture Overview
+**Active development (v1.0.4).** Last significant activity: **2026-11-12** — merge of a Jules feature branch (Protocol #281). Nov 9–11 work shipped v0.9.8–v1.0.4: bandwidth quota/traffic shaping, circuit auto-reset, federated channel bridge handover, route dispersal, a federated delivery ledger, percentile-bounded routing, and a silent-delivery-drop canary detector.
 
-OmniCore uses a **Headless Rust Core + Multi-Target UI** architecture:
+This is an ambitious, early-stage project. The architecture below is as documented in the repo; no release, packaged build, or evidence of live cross-platform messaging is in the tree. The previous README listed v0.5.2 — it was out of date.
 
-```text
-               +--------------------------------------------+
-               |        Desktop & Mobile Client Shells      |
-               |  - omnicore-ui: Tauri v2 + React 19 + Tray |
-               |  - omnicore-mobile: React Native + Expo    |
-               +--------------------------------------------+
-                                      |
-                     JSON-RPC IPC / Local WebSockets
-                                      |
-               +--------------------------------------------+
-               |               omnicore-engine              |
-               |                                            |
-               |  +-------------------+  +---------------+  |
-               |  |  SQLCipher Vault  |  | Multipath     |  |
-               |  |  AES-256-GCM / PBK|  | Router        |  |
-               |  +-------------------+  +---------------+  |
-               |  |  Federation &     |  | Ratchets &    |  |
-               |  |  Vector Clocks    |  | Pre-keys      |  |
-               |  +-------------------+  +---------------+  |
-               |  |  Tor SOCKS5 &     |  | Hardware      |  |
-               |  |  Reputation Engine|  | Telemetry     |  |
-               |  +-------------------+  +---------------+  |
-               +--------------------------------------------+
-                                      |
-         +----------+----------+------+-----+----------+----------+
-         |          |          |            |          |          |
-      Signal     Matrix     Discord      SimpleX      Tox        SMS /
-      (IPC)      (SDK)      (REST/GW)    (Queue)     (DHT)      iMessage
-```
+## Architecture
 
----
+Headless Rust core + multi-target UI:
 
-## Core Engine & Database Design
+- **`omnicore-engine`** — Rust core: SQLCipher encrypted storage (AES-256-GCM, PBKDF2-HMAC-SHA512), multi-path protocol fallback router, federation with vector clocks and deterministic conflict resolution, Double Ratchet sessions and pre-keys, Tor SOCKS5 routing, zero-knowledge cloud backup, QR identity pairing. Schema documented in `omnicore-engine/SCHEMA.md`.
+- **`omnicore-ui`** — Tauri v2 + React 19 desktop client with system tray; single-page multi-pane dashboard (Unified Chat Hub, Identity Manager, Protocol Bridge Deck, Routing Monitor).
+- **`omnicore-mobile`** — React Native + Expo app with conversation feeds, bridge status cards, and settings.
 
-### 1. SQLCipher Encrypted Storage
-- **Cryptographic Pragmas**: AES-256-GCM with PBKDF2-HMAC-SHA512 (`kdf_iter = 256000`, `cipher_page_size = 4096`, `foreign_keys = ON`).
-- **Relational Tables**:
-  - `contacts`: Unified human identities aggregating multiple accounts.
-  - `mappings`: External protocol IDs and handles mapped to unified contacts.
-  - `threads`: Direct 1:1 and multi-party chat sessions.
-  - `messages`: Universal message ledger tracking multi-protocol delivery states.
-  - `attachments`: Encrypted metadata for media blobs and files.
-  - `key_store`: Encrypted vault for Double Ratchet states and session keys.
-  - `sync_tokens`: Platform synchronization cursors for delta replication.
-- **Specification**: Complete database design is documented in [`omnicore-engine/SCHEMA.md`](omnicore-engine/SCHEMA.md).
+Protocol bridges (per repo docs): Signal (IPC), Matrix (SDK), Discord (REST/GW), SimpleX (queue), Tox (DHT), SMS, and a macOS iMessage relay.
 
-### 2. Multi-Path Protocol Fallback Router
-- Transparently routes messages across primary and fallback bridges (e.g. Signal -> Matrix -> SMS) with candidate exhaustion handling.
-- Integrated bridges for Signal, Matrix, Discord, SimpleX Chat, Tox DHT, Cellular SMS modem, and macOS iMessage relay.
-
-### 3. Decentralized Federation & Security
-- Multi-party channel state synchronization with causal vector clocks (`VectorClock`) and deterministic conflict resolution.
-- Cryptographic event signing and verification (`digest`, `sign`, `verify_signature`).
-- Double Ratchet forward secrecy session management and pre-key bundles (`ratchet.rs`).
-- Anonymity routing via Tor SOCKS5 proxy circuits and v3 .onion hidden service endpoints (`tor.rs`).
-- Zero-knowledge encrypted cloud backup provider with SHA-256 manifests (`backup.rs`).
-- Decentralized QR identity card pairing and mutual handshake challenge verification (`identity.rs`).
-
----
-
-## User Interface & System Tray
-
-- **Consolidated Dashboard UI (`omnicore-ui`)**: Single-page multi-pane view featuring Unified Chat Hub, Unified Identity Manager, Protocol Bridge Deck, and Routing Monitor with tooltips and accessible guidance.
-- **Native System Tray**: Tauri v2 tray icon with window show/hide toggles, bridge telemetry, and background server termination (`quit_app`).
-- **Mobile Shell (`omnicore-mobile`)**: React Native / Expo application with conversation feeds, bridge status cards, and settings view.
-
----
-
-## Development & Build Automation
+## Build & run
 
 Helper scripts in `scripts/`:
 
 ```bash
-# Build React frontend and compile Cargo workspace
-bash scripts/build.sh
-
-# Run full test suite (TypeScript build + Cargo workspace tests)
-bash scripts/test.sh
-
-# Start development preview server
-bash scripts/dev.sh
-
-# Run desktop Tauri application
-bash scripts/run.sh
-
-# Package multi-target bundles (desktop, android, ios, or all)
-bash scripts/bundle.sh all
+bash scripts/build.sh    # build React frontend + compile Cargo workspace
+bash scripts/test.sh     # full test suite (TypeScript build + Cargo workspace tests)
+bash scripts/dev.sh      # development preview server
+bash scripts/run.sh      # run desktop Tauri application
+bash scripts/bundle.sh all   # package multi-target bundles (desktop, android, ios)
 ```
-
----
-
-## Status
-
-Active implementation (v0.5.2). Part of Robert Pelloni's bob* ecosystem.
