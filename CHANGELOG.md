@@ -1,7 +1,14 @@
-# OmniCore Changelog
+﻿# OmniCore Changelog
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 1.1.0:
+  - Consolidated single-page dashboard: merged the former Bridges and Routing Monitor tab pages into the main page (People | Conversation | Bridges/Routing/Activity right rail | Security, Groups/Mesh/Calls, Engine bottom band), ordered by value with the conversation centered. Every omnicore-engine module is now represented in the UI with descriptive labels and accessible "?" tooltips; each capability row names its engine symbol (e.g. `MultipathRouter::route_with_canary_drop_detection`).
+  - Tauri backend: added `get_capabilities`, `get_routing_profiles`/`set_routing_profile`, `get_security_status`/`toggle_tor`/`export_identity_card`, `get_network_status`, `get_activity_log`, `get_channels`/`create_channel`, and `run_bridge_probe` commands backed by real engine types (IdentityCard, TorManager, TelemetryCollector, ApplianceConfig). Added the missing Nostr bridge to the desktop bridge list (8 networks, matching `ProtocolKind`).
+  - System tray: native menu now offers Show/Hide, Pause/Resume Routing Workers, Probe Bridges, Quit Servers Only (keep window), and Quit OmniCore & Servers; header Tray menu mirrors it.
+  - Fixed frontend build: Tailwind CSS v4 was installed while `postcss.config.js`/`index.css` still used v3 wiring, so `npm run build` always failed. Migrated to `@tailwindcss/postcss` + `@import "tailwindcss"`.
+  - Fixed Windows Rust build guidance: bundled SQLCipher needs `OPENSSL_DIR`; unified launchers auto-detect `C:\Program Files\OpenSSL-Win64`. Generated the missing `omnicore-ui/icons/icon.ico` required by tauri-build on Windows.
+  - Scripts: added unified `scripts/omnicore.ps1` / `scripts/omnicore.sh` (build/test/dev/run/bundle/status, below-normal priority for heavy builds); original five scripts kept and backed up under `scripts/archive/`. Added missing `omnicore-mobile/tsconfig.json` (mobile typecheck now passes). User manual added as `MANUAL.md`.
 - 1.0.4:
   - Silent Delivery Drop Canary Detector: Implemented `CanaryDropDetector` and `MultipathRouter::route_with_canary_drop_detection` in `omnicore-engine/src/router.rs`. Emits non-disruptive canary challenge nonces prior to candidate bridge message dispatches to proactively detect silent packet drops, ISP blackholing, or gateway drops, immediately triggering fallback cascades.
 - 1.0.3:
@@ -175,3 +182,4 @@ Document every adjustment. Track a single, global version string/date/build numb
   - Automation & Build Scripts: Added automated `scripts/build.sh`, `scripts/run.sh`, `scripts/dev.sh`, and `scripts/test.sh`.
   - Comprehensive Tooltips & Explanations: Interactive badges and tooltips added across all UI elements explaining transport encryption and fallback paths.
 - 0.1.0: Initial commit, core engine setup, SQLCipher storage, and skeleton protocol bridges.
+

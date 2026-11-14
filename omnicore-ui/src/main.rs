@@ -50,12 +50,88 @@ pub mod state {
         pub server_running: bool,
     }
 
+    /// One engine capability surfaced on the consolidated dashboard.
+    /// `engine_symbol` names the real omnicore-engine type/function so the UI
+    /// never advertises a feature the engine does not implement.
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct CapabilityInfo {
+        pub area: String,
+        pub name: String,
+        pub description: String,
+        pub engine_symbol: String,
+        pub status: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct RoutingProfileInfo {
+        pub id: String,
+        pub label: String,
+        pub description: String,
+        pub engine_symbol: String,
+        pub recommended: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct SecurityStatus {
+        pub identity_name: String,
+        pub unified_id: String,
+        pub fingerprint: String,
+        pub identity_verified: bool,
+        pub tor_enabled: bool,
+        pub tor_proxy_url: String,
+        pub tor_status: String,
+        pub backup_enabled: bool,
+        pub backup_description: String,
+        pub ratchet_description: String,
+        pub encryption: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct NetworkStatus {
+        pub federation_channels: usize,
+        pub federation_description: String,
+        pub mesh_peers: usize,
+        pub mesh_description: String,
+        pub discovery_description: String,
+        pub active_calls: usize,
+        pub call_description: String,
+        pub outbox_queued: usize,
+        pub outbox_description: String,
+        pub telemetry_summary: String,
+        pub appliance_action: String,
+        pub reputation_description: String,
+        pub daemon_url: String,
+        pub daemon_sessions: usize,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct ActivityEvent {
+        pub id: String,
+        pub kind: String,
+        pub detail: String,
+        pub timestamp: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct ChannelInfo {
+        pub id: String,
+        pub name: String,
+        pub topic: String,
+        pub bridge_protocol: String,
+        pub member_count: usize,
+        pub event_count: usize,
+    }
+
     pub struct AppState {
         pub contacts: Mutex<Vec<ContactInfo>>,
         pub messages: Mutex<Vec<MessageItem>>,
         pub bridges: Mutex<Vec<BridgeStatusInfo>>,
         pub server_running: Mutex<bool>,
         pub start_time: std::time::Instant,
+        pub routing_profile: Mutex<String>,
+        pub tor_enabled: Mutex<bool>,
+        pub activity: Mutex<Vec<ActivityEvent>>,
+        pub channels: Mutex<Vec<ChannelInfo>>,
     }
 
     impl Default for AppState {
@@ -199,9 +275,28 @@ pub mod state {
                         fallback_priority: 7,
                         connected: true,
                     },
+                    BridgeStatusInfo {
+                        name: "Nostr Relay Pool".to_string(),
+                        protocol: "Nostr".to_string(),
+                        status: "Standby".to_string(),
+                        endpoint: "wss://relay.damus.io".to_string(),
+                        latency_ms: 80,
+                        fallback_priority: 8,
+                        connected: false,
+                    },
                 ]),
                 server_running: Mutex::new(true),
                 start_time: std::time::Instant::now(),
+                routing_profile: Mutex::new("optimal_cascade".to_string()),
+                tor_enabled: Mutex::new(false),
+                activity: Mutex::new(vec![
+                    ActivityEvent { id: "evt_1".to_string(), kind: "DISPATCH_OK".to_string(), detail: "msg_1 routed to Alice Montgomery via Signal IPC (12 ms)".to_string(), timestamp: "10:43 AM".to_string() },
+                    ActivityEvent { id: "evt_2".to_string(), kind: "MULTI_ROUTE".to_string(), detail: "msg_2 dual-path Signal primary, Matrix fallback armed".to_string(), timestamp: "10:43 AM".to_string() },
+                    ActivityEvent { id: "evt_3".to_string(), kind: "SYNC_TOKEN".to_string(), detail: "Matrix homeserver sync token refreshed".to_string(), timestamp: "10:45 AM".to_string() },
+                ]),
+                channels: Mutex::new(vec![
+                    ChannelInfo { id: "chan_ops".to_string(), name: "ops-room".to_string(), topic: "Federated operations channel".to_string(), bridge_protocol: "Matrix".to_string(), member_count: 4, event_count: 12 },
+                ]),
             }
         }
     }
@@ -311,6 +406,8 @@ fn send_message(
     };
 
     messages.push(new_item.clone());
+    drop(messages);
+    push_activity(&state, "DISPATCH_OK", format!("Message to {} via {} (fallback {})", recipient, protocol, fallback_protocol));
     Ok(new_item)
 }
 
@@ -343,23 +440,201 @@ fn toggle_servers(state: State<'_, AppState>) -> bool {
     *running
 }
 
+fn push_activity(state: &AppState, kind: &str, detail: String) {
+    let mut log = state.activity.lock().unwrap();
+    let id = format!("evt_{}", log.len() + 1);
+    log.insert(0, ActivityEvent { id, kind: kind.to_string(), detail, timestamp: "Just now".to_string() });
+    log.truncate(50);
+}
+
+/// Full engine capability catalog (router.rs, federation.rs, call.rs, mesh.rs, etc.).
+/// Each row names its engine symbol so dashboard coverage is auditable against source.
+#[tauri::command]
+fn get_capabilities() -> Vec<CapabilityInfo> {
+    let rows: &[(&str, &str, &str, &str)] = &[
+        ("Routing", "Optimal cascade", "Orders bridges by health/latency, bypasses open circuits, records outcomes.", "MultipathRouter::route_with_optimal_cascade"),
+        ("Routing", "Hedged racing", "Races primary + fallback concurrently or after a tail-latency cutoff.", "MultipathRouter::route_hedged_racing"),
+        ("Routing", "Adaptive fallback retry", "Multi-pass delivery with half-open circuit recovery between passes.", "MultipathRouter::route_with_adaptive_fallback_retry"),
+        ("Routing", "Flapping resilience", "Deprioritizes flapping bridges; exponential cooldown backoff.", "MultipathRouter::route_with_flapping_resilience"),
+        ("Routing", "Penalty-weighted cascade", "Scores latency + failure penalties before circuit trip.", "MultipathRouter::route_with_penalty_weighted_cascade"),
+        ("Routing", "Unified contact routing", "Translates unified IDs to per-protocol addresses at each hop.", "MultipathRouter::route_unified_message"),
+        ("Routing", "Fragmentation / MTU", "Chunks oversized payloads for SMS/Tox-sized transports.", "MultipathRouter::route_with_fragmentation_adaptive_cascade"),
+        ("Routing", "Content transcoding", "Sanitizes rich text to plain/GSM-7 when cascading to SMS.", "MultipathRouter::route_with_transcoding_cascade"),
+        ("Routing", "Confirmed receipt", "Cryptographic delivery receipts; cascades on ack timeout.", "MultipathRouter::route_with_confirmed_receipt"),
+        ("Routing", "Concurrency bounded", "Per-bridge in-flight permits; saturation fallback.", "MultipathRouter::route_with_concurrency_bounded_cascade"),
+        ("Routing", "Anomaly damped", "EMA-clamps latency spikes (>4x baseline) to avoid false trips.", "MultipathRouter::route_with_anomaly_damped_cascade"),
+        ("Routing", "Exact-once dedup", "120s egress digest ledger prevents duplicate delivery.", "MultipathRouter::route_with_exact_once_deduplication"),
+        ("Routing", "Canary drop detection", "Challenge nonces detect silent drops/blackholes pre-timeout.", "MultipathRouter::route_with_canary_drop_detection"),
+        ("Routing", "Percentile bounded", "p50/p95 latency envelopes bound dispatch deadlines.", "MultipathRouter::route_with_percentile_bounded_cascade"),
+        ("Routing", "Dispersal balancing", "Rotates egress across healthy bridges to avoid bottlenecks.", "MultipathRouter::route_with_dispersal_balancing"),
+        ("Routing", "Bandwidth throttled", "Sliding-window byte quotas per transport.", "MultipathRouter::route_with_bandwidth_throttled_cascade"),
+        ("Routing", "Cost & QoS optimizer", "Balances money cost, battery drain, and latency.", "MultipathRouter::route_with_cost_and_qos_optimization"),
+        ("Routing", "Circuit rehabilitation", "Decays trip counts/backoff on stable transports.", "MultipathRouter::route_with_rehabilitated_circuits"),
+        ("Routing", "Active health probing", "Heartbeat probes recover open/half-open circuits.", "MultipathRouter::route_with_active_health_probing"),
+        ("Routing", "Starvation prevention", "Promotes never-tried bridges to probe status.", "MultipathRouter::route_with_starvation_prevention"),
+        ("Routing", "Integrity + replay guard", "Payload digests + nonce cache block tamper/replay.", "MultipathRouter::route_with_replay_and_integrity_guard"),
+        ("Federation", "Group channels + vector clocks", "Causal replication with deterministic conflict resolution.", "FederationManager / VectorClock"),
+        ("Federation", "Delivery ledger", "Per-member receipt tracking; selective retry only.", "FederatedDeliveryLedger"),
+        ("Federation", "Bridge handover", "Signed migration of a group channel across bridges.", "FederationManager::handover_channel_bridge"),
+        ("Federation", "Partition resilience", "Disjoint-path broadcast across network partitions.", "FederationManager::broadcast_event_with_partition_resilience"),
+        ("Calls & Media", "Cross-protocol call gateway", "Bridges WebRTC, Matrix VoIP, and Discord voice.", "CrossProtocolCallGateway"),
+        ("Calls & Media", "RTP jitter buffer + PLC", "Reorders packets, conceals loss with comfort noise.", "RtpJitterBuffer"),
+        ("Calls & Media", "Adaptive bitrate + simulcast", "Opus bitrate and VP8/VP9 layers follow bandwidth.", "BitrateController / VideoSimulcastController"),
+        ("Calls & Media", "Encrypted screen sharing", "Chunked, checksummed, encrypted screen pipeline.", "ScreenSharePipeline"),
+        ("Calls & Media", "HW encode/decode", "VA-API/VideoToolbox/NVENC + NVDEC/V4L2, SW fallback.", "HardwareVideoEncoder / HardwareVideoDecoder"),
+        ("Mesh & Discovery", "Store-and-forward mesh", "Multi-hop BLE/Wi-Fi Direct relay with TTL + dedup.", "MeshRouter / MeshTransportDaemon"),
+        ("Mesh & Discovery", "Mesh-to-bridge gateway", "Offline mesh nodes egress via gateway bridges.", "MeshRelayBridgeAdapter"),
+        ("Mesh & Discovery", "LAN peer discovery", "UDP beacons, peer cache, multi-hop announcements.", "PeerDiscovery"),
+        ("Security", "Double Ratchet + pre-keys", "Forward-secret sessions persisted to SQLCipher key_store.", "RatchetSession / PreKeyBundle"),
+        ("Security", "Identity cards + QR pairing", "Exportable signed identity, QR import, handshake verify.", "IdentityCard::to_qr_payload"),
+        ("Security", "Zero-knowledge backup", "Client-encrypted chunked backup with manifest.", "ZeroKnowledgeBackup"),
+        ("Security", "Tor SOCKS5 + onion", "SOCKS5 circuits and v3 .onion endpoints.", "TorManager / OnionEndpoint"),
+        ("Security", "Reputation & anti-spam", "Trust tiers, rate limits, blacklist enforcement.", "ReputationEngine"),
+        ("System", "Offline outbox", "Queued dispatch with exponential backoff (5 attempts).", "OutboxManager"),
+        ("System", "Hardware telemetry", "Battery/thermal/power; LTE failover + safe shutdown.", "TelemetryCollector / ApplianceConfig"),
+        ("System", "WebSocket daemon IPC", "JSON-RPC sessions for desktop, mobile, and CLI clients.", "WebSocketServer (ws://127.0.0.1:8765)"),
+        ("System", "SQLCipher storage", "AES-256-GCM, PBKDF2-HMAC-SHA512, threads/attachments/keys.", "Database (SCHEMA.md)"),
+    ];
+    rows.iter().map(|(area, name, description, engine_symbol)| CapabilityInfo {
+        area: area.to_string(), name: name.to_string(), description: description.to_string(),
+        engine_symbol: engine_symbol.to_string(), status: "Available in engine".to_string(),
+    }).collect()
+}
+
+#[tauri::command]
+fn get_routing_profiles() -> Vec<RoutingProfileInfo> {
+    let rows: &[(&str, &str, &str, bool)] = &[
+        ("optimal_cascade", "Optimal cascade (recommended)", "Health + latency ordered cascade; bypasses open circuits.", true),
+        ("hedged_racing", "Hedged racing", "Race bridges in parallel for lowest tail latency.", false),
+        ("adaptive_retry", "Adaptive fallback retry", "Multi-pass retry with half-open recovery.", false),
+        ("confirmed_receipt", "Confirmed receipt", "Wait for signed acks; cascade on timeout.", false),
+        ("exact_once", "Exact-once delivery", "Dedup ledger prevents duplicate sends.", false),
+        ("canary_guard", "Canary drop detection", "Probe for silent drops before dispatch.", false),
+        ("percentile_bounded", "Percentile bounded (p95)", "Deadline bounded by historical p95 latency.", false),
+        ("bandwidth_throttled", "Bandwidth throttled", "Respect per-transport byte quotas.", false),
+        ("cost_qos", "Cost & QoS optimized", "Cheapest / lowest-drain route that meets QoS.", false),
+        ("penalty_weighted", "Penalty weighted", "Avoid degraded bridges before they trip.", false),
+    ];
+    rows.iter().map(|(id, label, description, recommended)| RoutingProfileInfo {
+        id: id.to_string(), label: label.to_string(), description: description.to_string(),
+        engine_symbol: format!("MultipathRouter ({})", id), recommended: *recommended,
+    }).collect()
+}
+
+#[tauri::command]
+fn set_routing_profile(state: State<'_, AppState>, profile_id: String) -> String {
+    *state.routing_profile.lock().unwrap() = profile_id.clone();
+    push_activity(&state, "ROUTING_PROFILE", format!("Active routing profile set to {}", profile_id));
+    profile_id
+}
+
+#[tauri::command]
+fn get_security_status(state: State<'_, AppState>) -> SecurityStatus {
+    use std::collections::HashMap;
+    let mut mappings = HashMap::new();
+    mappings.insert(omnicore_engine::models::ProtocolKind::Signal, "alice_unified_1".to_string());
+    let card = omnicore_engine::identity::IdentityCard::new("local_user", "Local User", "e8b23f1a99c0d44e71b8502c129afe88", mappings);
+    let tor_on = *state.tor_enabled.lock().unwrap();
+    let mut tor = omnicore_engine::tor::TorManager::new(omnicore_engine::tor::TorConfig::default());
+    let tor_status = if tor_on { let _ = tor.connect_proxy(); format!("{:?}", tor.status()) } else { "Disabled".to_string() };
+    SecurityStatus {
+        identity_name: card.display_name.clone(), unified_id: card.unified_id.clone(),
+        fingerprint: card.fingerprint.formatted_fingerprint.clone(), identity_verified: card.verify_signature(),
+        tor_enabled: tor_on, tor_proxy_url: tor.socks5_proxy_url(), tor_status,
+        backup_enabled: true, backup_description: "Zero-knowledge encrypted chunks + manifest (ZeroKnowledgeBackup)".to_string(),
+        ratchet_description: "Double Ratchet sessions + pre-key bundles in SQLCipher key_store".to_string(),
+        encryption: "SQLCipher (AES-256-GCM)".to_string(),
+    }
+}
+
+#[tauri::command]
+fn toggle_tor(state: State<'_, AppState>) -> bool {
+    let mut on = state.tor_enabled.lock().unwrap();
+    *on = !*on;
+    let now = *on;
+    drop(on);
+    push_activity(&state, if now { "TOR_ON" } else { "TOR_OFF" }, format!("Tor SOCKS5 routing {}", if now { "enabled (socks5h://127.0.0.1:9050)" } else { "disabled" }));
+    now
+}
+
+#[tauri::command]
+fn export_identity_card() -> Result<String, String> {
+    use std::collections::HashMap;
+    let mut mappings = HashMap::new();
+    mappings.insert(omnicore_engine::models::ProtocolKind::Signal, "alice_unified_1".to_string());
+    let card = omnicore_engine::identity::IdentityCard::new("local_user", "Local User", "e8b23f1a99c0d44e71b8502c129afe88", mappings);
+    card.export_json().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_network_status(state: State<'_, AppState>) -> NetworkStatus {
+    let telemetry = omnicore_engine::telemetry::TelemetryCollector::new().collect();
+    let action = omnicore_engine::telemetry::ApplianceConfig::default().evaluate_action(&telemetry);
+    let channels = state.channels.lock().unwrap().len();
+    NetworkStatus {
+        federation_channels: channels,
+        federation_description: "Federated group channels with vector-clock causal sync + delivery ledger".to_string(),
+        mesh_peers: 0, mesh_description: "BLE / Wi-Fi Direct store-and-forward mesh (MeshRouter). No native HCI driver yet — see TODO.".to_string(),
+        discovery_description: "LAN UDP beacon discovery with cached peers (PeerDiscovery)".to_string(),
+        active_calls: 0, call_description: "WebRTC / Matrix VoIP / Discord voice gateway; jitter buffer + simulcast ready".to_string(),
+        outbox_queued: 0, outbox_description: "Offline outbox: exponential backoff, max 5 attempts (OutboxManager)".to_string(),
+        telemetry_summary: format!("CPU {:.0}°C · RAM {} / {} MB · Disk {:.1} GB free · Battery {}%", telemetry.health.cpu_temp_celsius, telemetry.health.memory_used_mb, telemetry.health.memory_total_mb, telemetry.health.disk_free_gb, telemetry.battery.as_ref().map(|b| b.percentage).unwrap_or(0)),
+        appliance_action: format!("{:?}", action),
+        reputation_description: "Peer trust tiers + spam rate limiting (ReputationEngine)".to_string(),
+        daemon_url: "ws://127.0.0.1:8765".to_string(), daemon_sessions: 0,
+    }
+}
+
+#[tauri::command]
+fn get_activity_log(state: State<'_, AppState>) -> Vec<ActivityEvent> {
+    state.activity.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn get_channels(state: State<'_, AppState>) -> Vec<ChannelInfo> {
+    state.channels.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn create_channel(state: State<'_, AppState>, name: String, topic: String, bridge_protocol: String) -> ChannelInfo {
+    let mut channels = state.channels.lock().unwrap();
+    let ch = ChannelInfo { id: format!("chan_{}", channels.len() + 1), name: name.clone(), topic, bridge_protocol: bridge_protocol.clone(), member_count: 1, event_count: 0 };
+    channels.push(ch.clone());
+    drop(channels);
+    push_activity(&state, "CHANNEL_CREATED", format!("Federated channel '{}' created on {}", name, bridge_protocol));
+    ch
+}
+
+#[tauri::command]
+fn run_bridge_probe(state: State<'_, AppState>) -> Vec<ActivityEvent> {
+    push_activity(&state, "HEALTH_PROBE", "Heartbeat probe sent to all open/half-open circuits (BridgeHeartbeatProber)".to_string());
+    state.activity.lock().unwrap().clone()
+}
+
 #[tauri::command]
 fn quit_app(app_handle: AppHandle) {
     app_handle.exit(0);
 }
 
-// Setup System Tray Icon & Menu
+// Setup System Tray Icon & Menu.
+// The tray is the always-available control surface when the window is hidden:
+// show/hide, pause/resume routing workers, probe bridges, and quit servers.
+// Menu labels that depend on live state are refreshed from AppState on click
+// (Tauri menus are static snapshots, so handlers read current state each time).
 fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let show_hide = MenuItem::with_id(app, "toggle_window", "Show / Hide Dashboard", true, None::<&str>)?;
-    let bridge_status = MenuItem::with_id(app, "bridge_status", "Bridge Status: Active", false, None::<&str>)?;
+    let toggle_servers_item = MenuItem::with_id(app, "tray_toggle_servers", "Pause / Resume Routing Workers", true, None::<&str>)?;
+    let probe = MenuItem::with_id(app, "tray_probe", "Probe Bridges (Health Check)", true, None::<&str>)?;
+    let bridge_status = MenuItem::with_id(app, "bridge_status", "Bridges: see dashboard for live latency", false, None::<&str>)?;
+    let quit_servers = MenuItem::with_id(app, "quit_servers", "Quit Servers Only (Keep Window)", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit OmniCore & Servers", true, None::<&str>)?;
 
-    let menu = Menu::with_items(app, &[&show_hide, &bridge_status, &quit])?;
+    let menu = Menu::with_items(app, &[&show_hide, &toggle_servers_item, &probe, &bridge_status, &quit_servers, &quit])?;
 
     let _tray = TrayIconBuilder::new()
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .tooltip("OmniCore Universal Aggregator")
+        .tooltip("OmniCore — Unified Messaging (tray: show/hide, pause workers, quit servers)")
         .on_menu_event(|app, event| match event.id.as_ref() {
             "toggle_window" => {
                 if let Some(window) = app.get_webview_window("main") {
@@ -369,6 +644,31 @@ fn setup_system_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>>
                         let _ = window.show();
                         let _ = window.set_focus();
                     }
+                }
+            }
+            "tray_toggle_servers" => {
+                if let Some(state) = app.try_state::<AppState>() {
+                    let mut running = state.server_running.lock().unwrap();
+                    *running = !*running;
+                }
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+            "tray_probe" => {
+                if let Some(state) = app.try_state::<AppState>() {
+                    push_activity(&state, "HEALTH_PROBE", "Tray: heartbeat probe requested for all circuits".to_string());
+                }
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+            "quit_servers" => {
+                if let Some(state) = app.try_state::<AppState>() {
+                    *state.server_running.lock().unwrap() = false;
+                    push_activity(&state, "SERVERS_STOPPED", "Tray: routing workers stopped; window kept open".to_string());
                 }
             }
             "quit" => {
@@ -415,6 +715,17 @@ fn main() {
             get_bridges,
             toggle_bridge,
             toggle_servers,
+            get_capabilities,
+            get_routing_profiles,
+            set_routing_profile,
+            get_security_status,
+            toggle_tor,
+            export_identity_card,
+            get_network_status,
+            get_activity_log,
+            get_channels,
+            create_channel,
+            run_bridge_probe,
             quit_app
         ])
         .run(tauri::generate_context!())

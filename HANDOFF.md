@@ -91,3 +91,49 @@ Summarize everything learned during the session that was not obvious at the star
 - Mobile shell settings screen implemented in `omnicore-mobile/src/screens/SettingsScreen.tsx` wired into `omnicore-mobile/App.tsx`.
 - Reputation & Anti-Spam engine implemented in `omnicore-engine/src/reputation.rs` with sliding-window rate limiting, cryptographic signature verification rewards, delivery acknowledgment tracking, and blacklist enforcement.
 - Causal conflict resolution and deterministic multi-replica event ordering implemented in `omnicore-engine/src/federation.rs`.
+
+---
+
+## Session 2026-11-13 (v1.1.0) — [muse-wonder-1.0 in Muse Code in C:\Users\hyper\workspace\bobble on laptop]
+
+Coordinator identity for cross-agent handoff: **[muse-wonder-1.0 in Muse Code in C:\Users\hyper\workspace\bobble on laptop]**. Edge CDP 9222 was live with muse.ai, ChatGPT, and Gemini tabs open; no messages were injected into those other agents' chats (would disrupt their sessions) — this file is the coordination surface. Successors: read this section first.
+
+### What was done
+- **Dashboard consolidated to one page** (`omnicore-ui/ui/src/App.tsx`, rewritten): People (left) | Conversation (center) | Bridges + Routing + Activity (right rail) | Security & Privacy, Groups/Mesh/Calls, Engine & System (bottom band). Former Bridges and Routing Monitor tabs are gone as separate views; nothing was dropped — groups/channels, mesh, calls, reputation, outbox, telemetry, daemon, and all 23 router cascades are represented with labels + accessible "?" tooltips citing engine symbols.
+- **Backend exposure** (`omnicore-ui/src/main.rs`): new Tauri commands `get_capabilities`, `get_routing_profiles`, `set_routing_profile`, `get_security_status`, `toggle_tor`, `export_identity_card`, `get_network_status`, `get_activity_log`, `get_channels`, `create_channel`, `run_bridge_probe`, using real engine types (IdentityCard, TorManager, TelemetryCollector/ApplianceConfig). Nostr added as the 8th bridge. Activity log records sends, profile changes, Tor toggles, probes, channel creation, tray actions.
+- **System tray completed**: native menu = Show/Hide, Pause/Resume Routing Workers, Probe Bridges, Quit Servers Only (keep window), Quit OmniCore & Servers. In-app Tray button mirrors it. Left-click tray icon shows/focuses the window.
+- **Scripts unified**: `scripts/omnicore.ps1` + `scripts/omnicore.sh` (build/test/dev/run/bundle/status; heavy builds at BelowNormal priority). Originals untouched and copied to `scripts/archive/`. `scripts/README.md` documents everything. Vite boilerplate `App.css` (unimported) archived to `omnicore-ui/ui/archive/`.
+- **Version**: 1.1.0 in VERSION.md, both Cargo crates, desktop + mobile package.json. Commit message carries the version (see git log).
+
+### What was broken and got fixed
+1. Frontend never built: Tailwind v4 installed, v3 PostCSS wiring. Fixed via `@tailwindcss/postcss` + `@import "tailwindcss"`. `npm run build` now passes (tsc + Vite).
+2. Windows Rust build: `OPENSSL_DIR` unset broke bundled SQLCipher; launchers auto-detect `C:\Program Files\OpenSSL-Win64`.
+3. `omnicore-ui/icons/icon.ico` missing (tauri-build Windows requirement) — generated from icon.png.
+4. `omnicore-mobile/tsconfig.json` missing — added (Expo base); mobile `tsc --noEmit` passes.
+5. Dashboard hid most of the engine: only chat/contacts/bridges/metrics were wired; Nostr missing on desktop.
+
+### Verified this session (all observed, not assumed)
+- `cargo test --workspace`: **130 passed, 0 failed** (127 engine + 3 UI), OPENSSL_DIR set.
+- `cargo build -p omnicore-ui`: produces `target/debug/omnicore-ui.exe` (16.4 MB).
+- `npm run build` in omnicore-ui/ui: passes. Vite dev server: HTTP 200 on http://localhost:1420 (needs ~7s to become ready).
+- Mobile: `npx tsc --noEmit` passes.
+- NOT live-verified: native tray click-through on a real desktop, Tauri GUI chat round-trip, Expo mobile run, live bridge traffic (bridges are engine skeletons/mocks — no real Signal/Matrix/Discord delivery proven).
+
+### What is not working / not fully running (honest list)
+- **Routing profile picker records the choice but does not yet change Dispatcher execution** in the desktop shell. Next task #1.
+- Desktop/mobile poll via Tauri invoke; **WebSocketServer event subscription is not wired** into either client.
+- **Mesh shows 0 peers**: native Bluetooth HCI + Android Wi-Fi Direct JNI drivers do not exist yet (engine mesh logic is unit-tested only).
+- Bridges remain skeleton/mock transports; no live cross-platform message has been proven end-to-end.
+- `registry.npmjs.org` rejects Node TLS on this machine (`ERR_SSL_TLSV1_ALERT_PROTOCOL_VERSION`); PowerShell reaches it fine. Workaround used: npmmirror registry + lockfile URL normalization. User could fix proxy/TLS policy; no further probing done.
+- Dependabot branch `origin/dependabot/npm_and_yarn/omnicore-ui/ui/npm_and_yarn-4bb469df06` shows no diff vs main (already superseded). Jules branch is fully merged into main. No submodules exist in this repo (Section 2 submodule steps: N/A).
+
+### What's next (priority order)
+1. Map dashboard routing profiles to real MultipathRouter execution in the desktop shell; show per-message strategy in Activity.
+2. Wire WebSocketServer subscriptions into desktop + mobile; retire polling.
+3. Live tray verification pass on Windows desktop; then a real two-bridge delivery proof (Matrix + one fallback).
+4. Native mesh drivers (HCI/JNI) — the only engine feature with no path to hardware.
+
+### What would help from the user
+- Whether live bridge credentials (Matrix homeserver, signald, Discord token) should be provisioned for an end-to-end proof, and on which host.
+- Confirmation that npmmirror-as-fallback is acceptable, or a proxy/TLS fix for registry.npmjs.org.
+- Whether the 15-minute autopilot cron (job b8144614) should keep running after this session.

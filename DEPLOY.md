@@ -34,3 +34,9 @@ Run the complete automated test suite:
 ```bash
 ./scripts/test.sh
 ```
+
+## Windows notes (verified 2026-11-13)
+- Set `$env:OPENSSL_DIR = 'C:\Program Files\OpenSSL-Win64'` before raw `cargo` commands (bundled SQLCipher), or use `scripts\omnicore.ps1` which auto-detects it.
+- `omnicore-ui/icons/icon.ico` is required by tauri-build on Windows (generated from `icon.png`).
+- If `npm install` fails with `ERR_SSL_TLSV1_ALERT_PROTOCOL_VERSION` against registry.npmjs.org, install with `--registry https://registry.npmmirror.com` and rewrite the lockfile `resolved` URLs back to registry.npmjs.org (integrity hashes are registry-independent).
+- Verified: `npm run build` (tsc + Vite) passes; `cargo test --workspace` = 130 passed; `cargo build -p omnicore-ui` produces `target/debug/omnicore-ui.exe`; Vite dev server serves HTTP 200 on port 1420 (allow ~7s startup).

@@ -82,3 +82,11 @@ Major, long-term structural milestones and structural plans.
 - [x] Route anomaly latency spike filtering and damped cascade routing (`route_with_anomaly_damped_cascade` in `router.rs`).
 - [x] Multi-bridge egress deduplication ledger and exact-once delivery enforcement (`route_with_exact_once_deduplication` in `router.rs`).
 - [ ] Full Milestone 6 verification and multi-node hardware test suite.
+
+## Milestone 7: Consolidated Dashboard & Full Engine Representation (Completed, v1.1.0)
+- [x] Single-page dashboard: former Bridges / Routing Monitor tab pages merged into the main page; layout ordered by value (Conversation center, People left, Bridges/Routing/Activity right rail, Security + Groups/Mesh/Calls + Engine bottom band).
+- [x] Full engine representation: all omnicore-engine modules (23 MultipathRouter cascades, federation, calls/media, mesh/discovery, ratchet/identity/backup/Tor/reputation, outbox/telemetry/daemon/SQLCipher) surfaced with labels, tooltips, and engine-symbol citations.
+- [x] Tauri commands for capabilities, routing profiles, security/Tor/identity export, network status, activity log, channels, and bridge probing; Nostr added as 8th desktop bridge.
+- [x] System tray completed: show/hide, pause/resume workers, probe bridges, quit-servers-only, quit all.
+- [ ] Next: wire routing-profile selection into the actual Dispatcher/MultipathRouter execution path (currently selects and logs the profile; dispatch still uses the default cascade in the desktop shell).
+- [ ] Next: live daemon session wiring — desktop/mobile should subscribe to WebSocketServer events instead of polling invoke calls.

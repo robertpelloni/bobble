@@ -74,3 +74,13 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Implement bridge concurrency permit bounding and saturation fallback in `omnicore-engine/src/router.rs`.
 - [x] Implement latency anomaly spike filtering and damped cascade routing in `omnicore-engine/src/router.rs`.
 - [x] Implement multi-bridge egress deduplication ledger and exact-once delivery enforcement in `omnicore-engine/src/router.rs`.
+- [x] Consolidate dashboard into a single page (no tabs) with every engine feature represented, labeled, and tooltip-explained (v1.1.0).
+- [x] Add Nostr to the desktop bridge deck (was engine-only).
+- [x] Complete system tray menu (pause/resume workers, probe, quit-servers-only, quit all).
+- [x] Fix Tailwind v4 PostCSS build break; fix Windows OpenSSL/SQLCipher build guidance; add missing icon.ico and mobile tsconfig.
+- [x] Unify scripts under scripts/omnicore.ps1 / omnicore.sh (originals archived).
+- [ ] Wire selected routing profile into Dispatcher execution (desktop shell currently records the choice).
+- [ ] Subscribe desktop/mobile to WebSocketServer event stream; remove invoke polling.
+- [ ] Native Bluetooth HCI adapter + Android Wi-Fi Direct JNI (carried over; mesh shows 0 peers until then).
+- [ ] Live-test native tray on Windows (left-click show, quit-servers-only) on a real desktop session.
+- [ ] Restore direct registry.npmjs.org installs (TLS alert seen 2026-11-13; mirror registry used as workaround — environment/network issue, see HANDOFF).
