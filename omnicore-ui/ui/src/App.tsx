@@ -76,7 +76,7 @@ const DEFAULT_CAPABILITIES: CapabilityInfo[] = [
 ];
 
 const DEFAULT_SECURITY: SecurityStatus = { identity_name: 'Local User', unified_id: 'local_user', fingerprint: 'E8B2-3F1A-99C0-D44E-71B8-502C-129A-FE88', identity_verified: true, tor_enabled: false, tor_proxy_url: 'socks5h://127.0.0.1:9050', tor_status: 'Disabled', backup_enabled: true, backup_description: 'Zero-knowledge encrypted chunks + manifest (ZeroKnowledgeBackup)', ratchet_description: 'Double Ratchet sessions + pre-key bundles in SQLCipher key_store', encryption: 'SQLCipher (AES-256-GCM)' };
-const DEFAULT_NETWORK: NetworkStatus = { federation_channels: 1, federation_description: 'Federated group channels with vector-clock causal sync + delivery ledger', mesh_peers: 0, mesh_description: 'BLE / Wi-Fi Direct store-and-forward mesh. No native HCI driver yet.', discovery_description: 'LAN UDP beacon discovery with cached peers (PeerDiscovery)', active_calls: 0, call_description: 'WebRTC / Matrix VoIP / Discord voice gateway; jitter buffer + simulcast ready', outbox_queued: 0, outbox_description: 'Offline outbox: exponential backoff, max 5 attempts (OutboxManager)', telemetry_summary: 'CPU 42°C · RAM 256 / 4096 MB · Disk 28.4 GB free · Battery 98%', appliance_action: 'Normal', reputation_description: 'Peer trust tiers + spam rate limiting (ReputationEngine)', daemon_url: 'ws://127.0.0.1:8765', daemon_sessions: 0 };
+const DEFAULT_NETWORK: NetworkStatus = { federation_channels: 1, federation_description: 'Federated group channels with vector-clock causal sync + delivery ledger', mesh_peers: 0, mesh_description: 'BLE / Wi-Fi Direct store-and-forward mesh. No native HCI driver yet.', discovery_description: 'LAN UDP beacon discovery with cached peers (PeerDiscovery)', active_calls: 0, call_description: 'WebRTC / Matrix VoIP / Discord voice gateway; jitter buffer + simulcast ready', outbox_queued: 0, outbox_description: 'Offline outbox: exponential backoff, max 5 attempts (OutboxManager)', telemetry_summary: 'CPU 42°C · RAM 256 / 4096 MB · Disk 28.4 GB free · Battery 98%', appliance_action: 'Normal', reputation_description: 'Peer trust tiers + spam rate limiting (ReputationEngine)', daemon_url: 'ws://127.0.0.1:18765', daemon_sessions: 0 };
 const DEFAULT_ACTIVITY: ActivityEvent[] = [
   { id: 'evt_1', kind: 'DISPATCH_OK', detail: 'msg_1 routed to Alice Montgomery via Signal IPC (12 ms)', timestamp: '10:43 AM' },
   { id: 'evt_2', kind: 'MULTI_ROUTE', detail: 'msg_2 dual-path Signal primary, Matrix fallback armed', timestamp: '10:43 AM' },
@@ -138,7 +138,7 @@ export default function App() {
   const [showAddChannel, setShowAddChannel] = useState(false);
   const [newChannelName, setNewChannelName] = useState('');
   const [newChannelTopic, setNewChannelTopic] = useState('');
-  const [daemon, setDaemon] = useState<DaemonStatus>({ url: 'ws://127.0.0.1:8765', running: false, sessions: 0, subscribed_channel: null });
+  const [daemon, setDaemon] = useState<DaemonStatus>({ url: 'ws://127.0.0.1:18765', running: false, sessions: 0, subscribed_channel: null });
   const [subChannel, setSubChannel] = useState('ops-room');
   const [showTrayMenu, setShowTrayMenu] = useState(false);
   const [notice, setNotice] = useState('');

@@ -41,7 +41,7 @@ export const SettingsScreen: React.FC = () => {
             style={styles.input}
             value={daemonEndpoint}
             onChangeText={setDaemonEndpoint}
-            placeholder="ws://127.0.0.1:8765"
+            placeholder="ws://127.0.0.1:18765"
             placeholderTextColor="#64748b"
           />
         </View>

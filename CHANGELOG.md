@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 1.3.1:
+  - Daemon port moved 8765 -> 18765: port 8765 on the dev machine is already held by an unrelated pythonw process (left untouched), which made the desktop listener fail to bind and external probes hit the wrong server. All desktop/mobile defaults now use ws://127.0.0.1:18765 (engine tests keep constructing explicit ports). Live-verified: real desktop binary launched (window 'OmniCore Universal Aggregator', responding), daemon listened on 18765, and an external Node WebSocket client received GetStatus (version 1.3.0, running) and SubscribeEvents replies. Also synced the stale tauri.conf.json version (was 1.0.4).
 - 1.3.0:
   - Real daemon network listener: WebSocketServer now accepts TCP/WebSocket connections (tokio-tungstenite), registers a session per socket, answers DaemonRequest JSON-RPC over the wire, and live-pushes broadcast_event frames to subscribed socket clients (in-process sessions still counted logically). Desktop starts the listener once on ws://127.0.0.1:8765 at engine init (bind failure is logged as DAEMON_LISTENER_ERROR, in-process session continues). Mobile event parser now handles the engine's serde-tagged EventNotification frames. Proven by test_websocket_listener_roundtrip_and_event_push (real client socket: GetStatus reply, RPC subscribe, pushed message_dispatched frame).
 - 1.2.0:

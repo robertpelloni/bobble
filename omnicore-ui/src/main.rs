@@ -315,7 +315,7 @@ pub mod state {
                 bandwidth_shaper: tokio::sync::Mutex::new(omnicore_engine::router::RouteBandwidthShaper::new(60)),
                 canary_detector: tokio::sync::Mutex::new(omnicore_engine::router::CanaryDropDetector::new(30)),
                 receipt_tracker: tokio::sync::Mutex::new(omnicore_engine::router::ReceiptTracker::new(30)),
-                daemon: tokio::sync::RwLock::new(omnicore_engine::server::WebSocketServer::new("127.0.0.1", 8765)),
+                daemon: tokio::sync::RwLock::new(omnicore_engine::server::WebSocketServer::new("127.0.0.1", 18765)),
                 daemon_listener_started: Mutex::new(false),
                 activity: Mutex::new(vec![
                     ActivityEvent { id: "evt_1".to_string(), kind: "DISPATCH_OK".to_string(), detail: "msg_1 routed to Alice Montgomery via Signal IPC (12 ms)".to_string(), timestamp: "10:43 AM".to_string() },
@@ -360,7 +360,7 @@ async fn init_engine(state: State<'_, AppState>) -> Result<String, String> {
     let server_clone = daemon.clone();
     drop(daemon);
     // Start the real TCP/WebSocket listener once so mobile/CLI clients can
-    // connect at ws://127.0.0.1:8765. The clone shares session/sender maps
+    // connect at ws://127.0.0.1:18765. The clone shares session/sender maps
     // with the in-process daemon, so broadcasts reach socket clients too.
     let should_start = {
         let mut started = state.daemon_listener_started.lock().unwrap();
@@ -369,15 +369,15 @@ async fn init_engine(state: State<'_, AppState>) -> Result<String, String> {
         should
     };
     if should_start {
-        match tokio::net::TcpListener::bind("127.0.0.1:8765").await {
+        match tokio::net::TcpListener::bind("127.0.0.1:18765").await {
             Ok(listener) => {
                 tokio::spawn(async move {
                     let _ = omnicore_engine::server::WebSocketServer::run_tcp_listener(std::sync::Arc::new(server_clone), listener).await;
                 });
-                push_activity(&state, "DAEMON_LISTENER", "WebSocket listener started on ws://127.0.0.1:8765".to_string());
+                push_activity(&state, "DAEMON_LISTENER", "WebSocket listener started on ws://127.0.0.1:18765".to_string());
             }
             Err(e) => {
-                push_activity(&state, "DAEMON_LISTENER_ERROR", format!("Could not bind ws://127.0.0.1:8765 ({}); in-process session still active", e));
+                push_activity(&state, "DAEMON_LISTENER_ERROR", format!("Could not bind ws://127.0.0.1:18765 ({}); in-process session still active", e));
             }
         }
     }
@@ -684,7 +684,7 @@ fn get_capabilities() -> Vec<CapabilityInfo> {
         ("Security", "Reputation & anti-spam", "Trust tiers, rate limits, blacklist enforcement.", "ReputationEngine"),
         ("System", "Offline outbox", "Queued dispatch with exponential backoff (5 attempts).", "OutboxManager"),
         ("System", "Hardware telemetry", "Battery/thermal/power; LTE failover + safe shutdown.", "TelemetryCollector / ApplianceConfig"),
-        ("System", "WebSocket daemon IPC", "JSON-RPC sessions for desktop, mobile, and CLI clients.", "WebSocketServer (ws://127.0.0.1:8765)"),
+        ("System", "WebSocket daemon IPC", "JSON-RPC sessions for desktop, mobile, and CLI clients.", "WebSocketServer (ws://127.0.0.1:18765)"),
         ("System", "SQLCipher storage", "AES-256-GCM, PBKDF2-HMAC-SHA512, threads/attachments/keys.", "Database (SCHEMA.md)"),
     ];
     rows.iter().map(|(area, name, description, engine_symbol)| CapabilityInfo {
@@ -774,7 +774,7 @@ async fn get_network_status(state: State<'_, AppState>) -> Result<NetworkStatus,
         telemetry_summary: format!("CPU {:.0}°C · RAM {} / {} MB · Disk {:.1} GB free · Battery {}%", telemetry.health.cpu_temp_celsius, telemetry.health.memory_used_mb, telemetry.health.memory_total_mb, telemetry.health.disk_free_gb, telemetry.battery.as_ref().map(|b| b.percentage).unwrap_or(0)),
         appliance_action: format!("{:?}", action),
         reputation_description: "Peer trust tiers + spam rate limiting (ReputationEngine)".to_string(),
-        daemon_url: "ws://127.0.0.1:8765".to_string(), daemon_sessions,
+        daemon_url: "ws://127.0.0.1:18765".to_string(), daemon_sessions,
     })
 }
 

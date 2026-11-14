@@ -19,7 +19,7 @@ interface DaemonEnvelope {
 
 class DaemonClient {
   private socket: WebSocket | null = null;
-  private endpoint = 'ws://127.0.0.1:8765';
+  private endpoint = 'ws://127.0.0.1:18765';
   connected = false;
   private handlers: DaemonEventHandler[] = [];
 

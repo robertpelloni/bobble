@@ -149,3 +149,7 @@ Coordinator identity for cross-agent handoff: **[muse-wonder-1.0 in Muse Code in
 ### Session 2026-11-13 (v1.3.0) — [muse-wonder-1.0 in Muse Code in C:\Users\hyper\workspace\bobble on laptop]
 - Daemon has a real WebSocket listener (see CHANGELOG 1.3.0); desktop binds ws://127.0.0.1:8765 at init, mobile can now genuinely connect when the desktop/engine host is reachable. Remaining honest gaps: live tray click-through unverified; bridges are skeleton transports (no credentialled live delivery proof); native mesh HCI/JNI drivers absent. Next: tray verification pass, then credentialled two-bridge proof (needs user credentials/host choice).
 
+
+### Session 2026-11-14 (v1.3.1) — [muse-wonder-1.0 in Muse Code in C:\Users\hyper\workspace\bobble on laptop]
+- Live verification pass: desktop binary + Vite launched at BelowNormal priority; daemon probed by an external Node WebSocket client. Found port 8765 occupied by the user's pythonw (2026-11-13 20:55) — not killed; daemon moved to 18765 everywhere and re-verified live (GetStatus/Subscribe over a real socket). Tray: app process/window verified live; tray icon click-through still not automated — needs a human glance at the Windows tray while the app runs. Next: credentialled two-bridge delivery proof (needs user credentials/host).
+
