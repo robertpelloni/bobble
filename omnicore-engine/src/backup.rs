@@ -1,5 +1,10 @@
 use anyhow::{anyhow, Result};
+use chacha20poly1305::{
+    aead::{Aead, KeyInit},
+    ChaCha20Poly1305, Key, Nonce,
+};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,8 +29,39 @@ impl Default for BackupConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EncryptedChunk {
     pub chunk_index: usize,
+    /// Hex SHA-256 of encrypted_bytes (integrity check before decryption).
     pub sha256_checksum: String,
+    /// 12-byte ChaCha20-Poly1305 nonce, unique per chunk in a backup.
+    pub nonce: Vec<u8>,
     pub encrypted_bytes: Vec<u8>,
+}
+
+/// Derives the 32-byte AEAD key from the user key via SHA-256.
+fn derive_key(key: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"omnicore-backup-v2:");
+    hasher.update(key);
+    hasher.finalize().into()
+}
+
+/// Deterministic per-chunk nonce: SHA-256(derived_key || index || created_at).
+/// Unique for every chunk of a backup under a given key; a backup recreated
+/// at a different second gets fresh nonces.
+fn chunk_nonce(derived_key: &[u8; 32], index: usize, created_at: u64) -> [u8; 12] {
+    let mut hasher = Sha256::new();
+    hasher.update(derived_key);
+    hasher.update((index as u64).to_be_bytes());
+    hasher.update(created_at.to_be_bytes());
+    let digest = hasher.finalize();
+    let mut nonce = [0u8; 12];
+    nonce.copy_from_slice(&digest[..12]);
+    nonce
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hasher.finalize().iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,23 +95,25 @@ impl ZeroKnowledgeBackup {
             .as_secs();
 
         let chunk_size = self.config.chunk_size_bytes;
+        let derived = derive_key(key);
+        let cipher = ChaCha20Poly1305::new(Key::from_slice(&derived));
         let mut chunks = Vec::new();
         let mut checksums = Vec::new();
 
-        for (index, slice) in plaintext.chunks(chunk_size).enumerate() {
-            // Client-side encryption: XOR with rolling key stream as PoC
-            let mut encrypted = Vec::with_capacity(slice.len());
-            for (i, &b) in slice.iter().enumerate() {
-                let k = key[i % key.len()];
-                encrypted.push(b ^ k);
-            }
-
-            let checksum = format!("{:016x}", compute_checksum(&encrypted));
+        // Empty plaintext still produces one (empty) chunk so restores can
+        // distinguish "empty backup" from "missing backup".
+        let slices: Vec<&[u8]> = if plaintext.is_empty() { vec![&[]] } else { plaintext.chunks(chunk_size).collect() };
+        for (index, slice) in slices.iter().enumerate() {
+            let nonce_bytes = chunk_nonce(&derived, index, now);
+            let encrypted = cipher
+                .encrypt(Nonce::from_slice(&nonce_bytes), *slice)
+                .map_err(|_| anyhow!("Backup chunk encryption failed at index {}", index))?;
+            let checksum = sha256_hex(&encrypted);
             checksums.push(checksum.clone());
-
             chunks.push(EncryptedChunk {
                 chunk_index: index,
                 sha256_checksum: checksum,
+                nonce: nonce_bytes.to_vec(),
                 encrypted_bytes: encrypted,
             });
         }
@@ -84,9 +122,7 @@ impl ZeroKnowledgeBackup {
             manifest_id: format!("manifest_{}", now),
             total_chunks: chunks.len(),
             total_plaintext_size: plaintext.len(),
-            // Honest label: create_backup currently uses a rolling-key XOR
-            // stream as a proof of concept, not a production AEAD cipher.
-            cipher_algorithm: "XOR rolling-key PoC (not production AEAD)".to_string(),
+            cipher_algorithm: "ChaCha20-Poly1305 AEAD (SHA-256 key derivation, per-chunk nonce)".to_string(),
             chunk_checksums: checksums,
             created_at: now,
         };
@@ -104,6 +140,8 @@ impl ZeroKnowledgeBackup {
             ));
         }
 
+        let derived = derive_key(key);
+        let cipher = ChaCha20Poly1305::new(Key::from_slice(&derived));
         let mut reconstructed = Vec::with_capacity(manifest.total_plaintext_size);
 
         for (i, chunk) in chunks.iter().enumerate() {
@@ -111,29 +149,21 @@ impl ZeroKnowledgeBackup {
                 return Err(anyhow!("Chunk sequence error at index {}", i));
             }
             let expected_checksum = &manifest.chunk_checksums[i];
-            let actual_checksum = format!("{:016x}", compute_checksum(&chunk.encrypted_bytes));
-            if &actual_checksum != expected_checksum {
+            if &sha256_hex(&chunk.encrypted_bytes) != expected_checksum {
                 return Err(anyhow!("Integrity violation: checksum mismatch on chunk {}", i));
             }
-
-            // Decrypt chunk
-            for (j, &b) in chunk.encrypted_bytes.iter().enumerate() {
-                let k = key[j % key.len()];
-                reconstructed.push(b ^ k);
+            if chunk.nonce.len() != 12 {
+                return Err(anyhow!("Invalid nonce length on chunk {}", i));
             }
+            // AEAD decryption fails on tampered ciphertext or a wrong key.
+            let decrypted = cipher
+                .decrypt(Nonce::from_slice(&chunk.nonce), chunk.encrypted_bytes.as_ref())
+                .map_err(|_| anyhow!("Decryption failed on chunk {} (tampered data or wrong key)", i))?;
+            reconstructed.extend_from_slice(&decrypted);
         }
 
         Ok(reconstructed)
     }
-}
-
-fn compute_checksum(bytes: &[u8]) -> u64 {
-    let mut sum: u64 = 0xcbf29ce484222325;
-    for &b in bytes {
-        sum ^= b as u64;
-        sum = sum.wrapping_mul(0x100000001b3);
-    }
-    sum
 }
 
 #[cfg(test)]
@@ -174,5 +204,14 @@ mod tests {
         tampered_chunks[0].encrypted_bytes[0] ^= 0xFF;
         let tamper_res = backup.restore_backup(&manifest, &tampered_chunks, secret_key);
         assert!(tamper_res.is_err());
+
+        // 4. Real AEAD: ciphertext must not contain the plaintext, the
+        // manifest must name the real cipher, and a wrong key must fail.
+        assert!(manifest.cipher_algorithm.contains("ChaCha20-Poly1305"));
+        assert!(!chunks[0].encrypted_bytes.windows(b"OmniCore".len()).any(|w| w == b"OmniCore"));
+        assert!(backup.restore_backup(&manifest, &chunks, b"wrong_key_entirely").is_err());
+        // Empty plaintext round-trips as one chunk.
+        let (empty_manifest, empty_chunks) = backup.create_backup(&[], secret_key).unwrap();
+        assert_eq!(backup.restore_backup(&empty_manifest, &empty_chunks, secret_key).unwrap(), Vec::<u8>::new());
     }
 }

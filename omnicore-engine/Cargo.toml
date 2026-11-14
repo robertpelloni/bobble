@@ -1,6 +1,6 @@
 [package]
 name = "omnicore-engine"
-version = "1.11.0"
+version = "1.12.0"
 edition = "2021"
 
 [dependencies]
@@ -14,5 +14,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 matrix-sdk = "0.7"
 tokio-tungstenite = "0.21"
+chacha20poly1305 = "0.10"
+sha2 = "0.10"
 futures-util = "0.3"
 serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "rustls_backend", "model"] }

@@ -1543,7 +1543,7 @@ mod tests {
         let summary = crate::create_backup_inner(&state).unwrap();
         assert!(summary.total_chunks >= 1);
         assert!(summary.total_plaintext_size > 0);
-        assert!(summary.cipher_algorithm.contains("PoC"), "cipher must be honestly labeled: {}", summary.cipher_algorithm);
+        assert!(summary.cipher_algorithm.contains("ChaCha20-Poly1305"), "cipher must be the real AEAD: {}", summary.cipher_algorithm);
         let verified = crate::verify_backup_inner(&state).unwrap();
         assert!(verified.contains("checksums OK"), "verified: {}", verified);
         assert!(verified.contains("4 contact(s)"), "verified: {}", verified);
