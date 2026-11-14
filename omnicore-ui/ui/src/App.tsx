@@ -25,6 +25,7 @@ interface DaemonStatus { url: string; running: boolean; sessions: number; subscr
 interface BridgeDiagnosis { protocol: string; total_attempts: number; successful_attempts: number; average_latency_ms: number; consecutive_failures: number; circuit_state: string; anomalies: string[]; }
 interface CallInfo { route_id: string; contact_name: string; source_protocol: string; target_protocol: string; state: string; }
 interface PeerTrustInfo { name: string; score: number; tier: string; successful_deliveries: number; spam_violations: number; }
+interface MeshInfo { connected_peers: number; queued_forwards: number; seen_packets: number; }
 
 const PROTOCOLS = ['Signal', 'Matrix', 'Discord', 'Simplex', 'Tox', 'iMessage', 'SMS', 'Nostr'];
 
@@ -143,6 +144,9 @@ export default function App() {
   const [newChannelTopic, setNewChannelTopic] = useState('');
   const [handoverTargets, setHandoverTargets] = useState<Record<string, string>>({});
   const [groupMemberId, setGroupMemberId] = useState('');
+  const [mesh, setMesh] = useState<MeshInfo>({ connected_peers: 0, queued_forwards: 0, seen_packets: 0 });
+  const [meshPeerId, setMeshPeerId] = useState('');
+  const [meshTransport, setMeshTransport] = useState('BLE');
   const [reputations, setReputations] = useState<PeerTrustInfo[]>([]);
   const [calls, setCalls] = useState<CallInfo[]>([]);
   const [diagnoses, setDiagnoses] = useState<BridgeDiagnosis[]>([]);
@@ -498,7 +502,12 @@ export default function App() {
                 <button type="submit" className="px-2 py-1 bg-sky-700 hover:bg-sky-600 rounded font-semibold" title="Record this post in the channel's causal event history and broadcast it to other members.">Post</button>
               </form>
               <p className="text-[11px] text-slate-400 leading-snug"><strong className="text-slate-300">Federation:</strong> {network.federation_description} ({network.federation_channels} group{network.federation_channels === 1 ? '' : 's'} here)</p>
-              <p className="text-[11px] text-slate-400 leading-snug"><strong className="text-slate-300">Mesh:</strong> {network.mesh_description} Peers nearby: {network.mesh_peers}. <strong className="text-slate-300">Discovery:</strong> {network.discovery_description}</p>
+              <p className="text-[11px] text-slate-400 leading-snug"><strong className="text-slate-300">Mesh:</strong> {network.mesh_description} Peers connected: {mesh.connected_peers} · queued forwards {mesh.queued_forwards} · seen packets {mesh.seen_packets}. <strong className="text-slate-300">Discovery:</strong> {network.discovery_description}</p>
+              <div className="flex gap-1.5 text-[11px]">
+                <input value={meshPeerId} onChange={(e) => setMeshPeerId(e.target.value)} placeholder="Mesh peer ID (e.g. node_alpha)" aria-label="Mesh peer ID" className="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded px-2 py-1" />
+                <select value={meshTransport} onChange={(e) => setMeshTransport(e.target.value)} aria-label="Mesh transport" className="bg-slate-950 border border-slate-700 rounded px-1.5 py-1" title="Physical mesh transport for this peer channel (MeshTransportDaemon). Native BLE/Wi-Fi drivers are still pending, so this attaches the daemon channel that hardware will bind to."><option>BLE</option><option>WiFi Direct</option><option>UDP Broadcast</option></select>
+                <button type="button" onClick={() => { if (!meshPeerId.trim()) { setNotice('Enter a mesh peer ID first.'); return; } if (isTauri) invoke('attach_mesh_peer', { peerId: meshPeerId, transport: meshTransport }).then((r) => { setMesh(r as MeshInfo); setMeshPeerId(''); invoke('get_activity_log').then((a) => setActivity(a as ActivityEvent[])).catch(console.error); }).catch((e) => setNotice(`Attach mesh peer failed: ${e}`)); else { setMesh((p) => ({ ...p, connected_peers: p.connected_peers + 1 })); logLocal('MESH_PEER_ATTACHED', `Mesh peer '${meshPeerId}' attached via ${meshTransport} (preview)`); setMeshPeerId(''); } }} className="px-2 py-1 bg-slate-800 border border-slate-700 rounded font-semibold" title="Attach a peer channel to the local mesh transport daemon (MeshTransportDaemon::attach_channel).">Attach peer</button>
+              </div>
               <p className="text-[11px] text-slate-400 leading-snug"><strong className="text-slate-300">Calls:</strong> {network.call_description} Active calls: {network.active_calls}.</p>
               <div className="flex gap-1.5 text-[11px]">
                 <button type="button" onClick={handleStartCall} className="px-2 py-1 bg-sky-700 hover:bg-sky-600 rounded font-semibold" title={`Start an audio/video call to the selected person (${selectedContact.name}), bridging ${primaryProtocol} to ${fallbackProtocol} through the cross-protocol call gateway with SDP offer/answer negotiation.`}>Call {selectedContact.name.split(' ')[0]} ({primaryProtocol} → {fallbackProtocol})</button>

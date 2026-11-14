@@ -124,6 +124,13 @@ pub mod state {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct MeshInfo {
+        pub connected_peers: usize,
+        pub queued_forwards: usize,
+        pub seen_packets: usize,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct PeerTrustInfo {
         pub name: String,
         pub score: i32,
@@ -212,6 +219,8 @@ pub mod state {
         pub call_routes: Mutex<Vec<CallInfo>>,
         // Peer reputation: delivery acks build trust, spam would erode it.
         pub reputation: Mutex<omnicore_engine::reputation::ReputationEngine>,
+        // Local mesh transport daemon (BLE / Wi-Fi Direct channels).
+        pub mesh: Mutex<omnicore_engine::mesh::MeshTransportDaemon>,
     }
 
     impl Default for AppState {
@@ -397,6 +406,7 @@ pub mod state {
                 call_gateway: Mutex::new(omnicore_engine::call::CrossProtocolCallGateway::new()),
                 call_routes: Mutex::new(Vec::new()),
                 reputation: Mutex::new(omnicore_engine::reputation::ReputationEngine::new(omnicore_engine::reputation::SpamHeuristicFilter::default())),
+                mesh: Mutex::new(omnicore_engine::mesh::MeshTransportDaemon::new("local_user")),
             }
         }
     }
@@ -1233,7 +1243,7 @@ async fn get_network_status(state: State<'_, AppState>) -> Result<NetworkStatus,
     Ok(NetworkStatus {
         federation_channels: channels,
         federation_description: "Federated group channels with vector-clock causal sync + delivery ledger".to_string(),
-        mesh_peers: 0, mesh_description: "BLE / Wi-Fi Direct store-and-forward mesh (MeshRouter). No native HCI driver yet — see TODO.".to_string(),
+        mesh_peers: state.mesh.lock().unwrap().connected_channel_count(), mesh_description: "BLE / Wi-Fi Direct store-and-forward mesh (MeshTransportDaemon). Attach peers in Groups, mesh & calls; native HCI/JNI drivers still pending.".to_string(),
         discovery_description: "LAN UDP beacon discovery with cached peers (PeerDiscovery)".to_string(),
         active_calls, call_description: "WebRTC / Matrix VoIP / Discord voice gateway; jitter buffer + simulcast ready. Start a call from Groups, mesh & calls.".to_string(),
         outbox_queued, outbox_description: "Offline outbox: failed sends queue here; Retry re-runs the active profile with exponential backoff, max 5 attempts (OutboxManager)".to_string(),
@@ -1399,6 +1409,41 @@ async fn diagnose_bridges_inner(state: &AppState) -> Vec<BridgeDiagnosis> {
     let flagged = out.iter().filter(|d| !d.anomalies.is_empty()).count();
     push_activity(state, "BRIDGE_DIAGNOSIS", format!("Diagnosed {} bridges: {} with anomalies (see Bridges panel)", out.len(), flagged));
     out
+}
+
+fn mesh_info(state: &AppState) -> MeshInfo {
+    let daemon = state.mesh.lock().unwrap();
+    MeshInfo {
+        connected_peers: daemon.connected_channel_count(),
+        queued_forwards: daemon.router().queued_forward_count(),
+        seen_packets: daemon.router().seen_packet_count(),
+    }
+}
+
+fn attach_mesh_peer_inner(state: &AppState, peer_id: &str, transport_name: &str) -> Result<MeshInfo, String> {
+    if peer_id.trim().is_empty() {
+        return Err("Mesh peer id cannot be empty".to_string());
+    }
+    let transport = match transport_name.to_ascii_lowercase().as_str() {
+        "ble" | "blemesh" | "ble mesh" => omnicore_engine::discovery::MeshTransportType::BleMesh,
+        "wifi" | "wifidirect" | "wi-fi direct" | "wifi direct" => omnicore_engine::discovery::MeshTransportType::WifiDirect,
+        "udp" | "udpbroadcast" | "udp broadcast" => omnicore_engine::discovery::MeshTransportType::UdpBroadcast,
+        other => return Err(format!("Unknown mesh transport '{}'", other)),
+    };
+    state.mesh.lock().unwrap().attach_channel(peer_id, transport);
+    let info = mesh_info(state);
+    push_activity(state, "MESH_PEER_ATTACHED", format!("Mesh peer '{}' attached via {} ({} connected)", peer_id, transport_name, info.connected_peers));
+    Ok(info)
+}
+
+#[tauri::command]
+fn attach_mesh_peer(state: State<'_, AppState>, peer_id: String, transport: String) -> Result<MeshInfo, String> {
+    attach_mesh_peer_inner(&state, &peer_id, &transport)
+}
+
+#[tauri::command]
+fn get_mesh_info(state: State<'_, AppState>) -> MeshInfo {
+    mesh_info(&state)
 }
 
 /// Records a delivery acknowledgement for a peer and returns their trust.
@@ -1631,6 +1676,8 @@ fn main() {
             end_call,
             get_calls,
             get_reputations,
+            attach_mesh_peer,
+            get_mesh_info,
             run_bridge_probe,
             get_daemon_status,
             subscribe_daemon_events,
@@ -1715,6 +1762,19 @@ mod tests {
         let bridges = state2.bridges.lock().unwrap();
         assert!(bridges.iter().find(|b| b.protocol == "Nostr").unwrap().connected);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_mesh_peer_attach() {
+        let state = AppState::default();
+        assert_eq!(crate::mesh_info(&state).connected_peers, 0);
+        let info = crate::attach_mesh_peer_inner(&state, "node_alpha", "BLE").unwrap();
+        assert_eq!(info.connected_peers, 1);
+        let info2 = crate::attach_mesh_peer_inner(&state, "node_beta", "WiFi Direct").unwrap();
+        assert_eq!(info2.connected_peers, 2);
+        // Empty peer id and unknown transport are explicit errors.
+        assert!(crate::attach_mesh_peer_inner(&state, "  ", "BLE").is_err());
+        assert!(crate::attach_mesh_peer_inner(&state, "node_x", "CarrierPigeon").is_err());
     }
 
     #[test]

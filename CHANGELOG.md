@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 1.16.0:
+  - Mesh is interactive: the desktop holds a real MeshTransportDaemon; Groups, mesh & calls can attach peer channels (BLE / Wi-Fi Direct / UDP Broadcast) and shows connected peers, queued forwards, and seen packets from the daemon's MeshRouter. Network status mesh_peers now reads the daemon instead of a hardcoded 0. Native HCI/JNI hardware drivers remain pending and are labeled as such.
 - 1.15.0:
   - Peer reputation is live: successful deliveries record acknowledgements in ReputationEngine (TRUST_UPDATED in Activity), and every person in the People list shows a trust tier badge (Neutral/Vetted/Trusted/Untrusted/Blacklisted with score, deliveries, and spam counts in the tooltip). Previously reputation was only descriptive text.
 - 1.14.0:
