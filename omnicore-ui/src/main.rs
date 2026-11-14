@@ -1051,6 +1051,44 @@ async fn create_channel(state: State<'_, AppState>, name: String, topic: String,
     Ok(create_federated_channel(&state, &name, &topic, &bridge_protocol).await)
 }
 
+/// Simulated local signing key for handovers. The engine's handover
+/// signature scheme is itself simulated (see federation.rs sign/verify);
+/// this is labeled as such in Activity rather than presented as production crypto.
+const LOCAL_HANDOVER_KEY: &str = "omnicore-local-handover-key-sim";
+
+async fn perform_handover(state: &AppState, channel_id: &str, to_protocol: &str) -> Result<ChannelInfo, String> {
+    let to = omnicore_engine::models::ProtocolKind::from_str_name(to_protocol).ok_or_else(|| format!("Unknown protocol '{}'", to_protocol))?;
+    let mut mgr = state.federation.lock().await;
+    let from = mgr.get_channel(channel_id).and_then(|c| c.active_bridge).unwrap_or(omnicore_engine::models::ProtocolKind::Matrix);
+    if from == to {
+        return Ok(channel_to_info(mgr.get_channel(channel_id).ok_or("Channel vanished")?));
+    }
+    let mut handover = omnicore_engine::federation::FederatedChannelBridgeHandover {
+        handover_id: format!("ho_{}_{}", channel_id, now_epoch()),
+        channel_id: channel_id.to_string(),
+        initiator_id: "local_user".to_string(),
+        from_protocol: from,
+        to_protocol: to,
+        fallback_protocols: vec![from],
+        reason: "Operator-initiated bridge migration from dashboard".to_string(),
+        timestamp_sec: now_epoch(),
+        public_key: None,
+        signature: None,
+    };
+    handover.sign("local_user_pubkey_sim", LOCAL_HANDOVER_KEY);
+    mgr.handover_channel_bridge(channel_id, handover, LOCAL_HANDOVER_KEY).map_err(|e| e.to_string())?;
+    let info = channel_to_info(mgr.get_channel(channel_id).ok_or("Channel vanished after handover")?);
+    drop(mgr);
+    push_activity(state, "BRIDGE_HANDOVER", format!("#{} migrated {} -> {} (signed, simulated key)", info.name, from.as_str(), to.as_str()));
+    Ok(info)
+}
+
+/// Migrates a federated channel to a different bridge (signed handover).
+#[tauri::command]
+async fn handover_channel(state: State<'_, AppState>, channel_id: String, to_protocol: String) -> Result<ChannelInfo, String> {
+    perform_handover(&state, &channel_id, &to_protocol).await
+}
+
 /// Adds a unified contact as a member of a federated channel (idempotent).
 #[tauri::command]
 async fn add_channel_member(state: State<'_, AppState>, channel_id: String, unified_id: String, display_name: String) -> Result<ChannelInfo, String> {
@@ -1212,6 +1250,7 @@ fn main() {
             get_activity_log,
             get_channels,
             create_channel,
+            handover_channel,
             add_channel_member,
             post_channel_message,
             run_bridge_probe,
@@ -1298,6 +1337,19 @@ mod tests {
         let bridges = state2.bridges.lock().unwrap();
         assert!(bridges.iter().find(|b| b.protocol == "Nostr").unwrap().connected);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_handover_channel_migrates_bridge() {
+        let state = AppState::default();
+        let created = crate::create_federated_channel(&state, "Migrate Room", "topic", "Signal").await;
+        assert_eq!(created.bridge_protocol, "Signal");
+        let moved = crate::perform_handover(&state, &created.id, "Matrix").await.unwrap();
+        assert_eq!(moved.bridge_protocol, "Matrix");
+        // Same-bridge handover is a no-op, unknown protocol is an error.
+        let same = crate::perform_handover(&state, &created.id, "Matrix").await.unwrap();
+        assert_eq!(same.bridge_protocol, "Matrix");
+        assert!(crate::perform_handover(&state, &created.id, "CarrierPigeon").await.is_err());
     }
 
     #[tokio::test]

@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 1.8.0:
+  - Bridge handover in the dashboard: each group channel card has a target-bridge picker and Migrate button. Migration builds a FederatedChannelBridgeHandover (old bridge becomes fallback, causal history preserved), signs it, and applies it via FederationManager::handover_channel_bridge; logged as BRIDGE_HANDOVER. The engine signature scheme is simulated and is labeled as such.
 - 1.7.1:
   - Group members: FederatedChannel::add_member (idempotent, advances causal clock) plus add_channel_member desktop command and a member picker in the Groups panel, so posts can broadcast to real members instead of only the local user.
   - Fixed mobile package-lock desync (npm ci EUSAGE: mime 1.7.0 vs 1.6.0) caused by a global version-string replace rewriting dependency versions; locks regenerated and verified with npm ci --dry-run. Version bumps are now surgical (root fields only). This also fixes the red Mobile job on the v1.7.0 CI run.

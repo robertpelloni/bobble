@@ -138,6 +138,7 @@ export default function App() {
   const [showAddChannel, setShowAddChannel] = useState(false);
   const [newChannelName, setNewChannelName] = useState('');
   const [newChannelTopic, setNewChannelTopic] = useState('');
+  const [handoverTargets, setHandoverTargets] = useState<Record<string, string>>({});
   const [groupMemberId, setGroupMemberId] = useState('');
   const [groupPostText, setGroupPostText] = useState('');
   const [groupChannelId, setGroupChannelId] = useState('chan_ops');
@@ -276,6 +277,16 @@ export default function App() {
     } else {
       setChannels((p) => p.map((x) => (x.id === groupChannelId ? { ...x, member_count: x.member_count + 1 } : x)));
       logLocal('MEMBER_ADDED', `${contact.name} joined channel ${groupChannelId} (preview)`);
+    }
+  };
+
+  const handleHandover = (channelId: string, currentBridge: string) => {
+    const target = handoverTargets[channelId] || PROTOCOLS.find((p) => p !== currentBridge) || 'Matrix';
+    if (isTauri) {
+      invoke('handover_channel', { channelId, toProtocol: target }).then((c) => { const ch = c as ChannelInfo; setChannels((p) => p.map((x) => (x.id === ch.id ? ch : x))); invoke('get_activity_log').then((a) => setActivity(a as ActivityEvent[])).catch(console.error); }).catch((err) => setNotice(`Bridge migration failed: ${err}`));
+    } else {
+      setChannels((p) => p.map((x) => (x.id === channelId ? { ...x, bridge_protocol: target } : x)));
+      logLocal('BRIDGE_HANDOVER', `Channel ${channelId} migrated to ${target} (preview)`);
     }
   };
 
@@ -444,7 +455,7 @@ export default function App() {
           <Section title="Groups, mesh & calls" tip="Federated group channels replicate across networks with vector clocks. Mesh relays messages device-to-device when the internet is gone. Calls bridge WebRTC, Matrix VoIP, and Discord voice." action={<button onClick={() => setShowAddChannel(!showAddChannel)} className="text-[11px] px-2 py-1 bg-sky-700 hover:bg-sky-600 rounded font-semibold" title="Create a federated group channel hosted on a bridge network.">+ Group</button>}>
             {showAddChannel && <form onSubmit={handleAddChannel} className="mb-2 bg-slate-800/70 border border-slate-700 rounded p-2.5 flex flex-col gap-2 text-xs"><input placeholder="Group name (e.g. family)" aria-label="Group name" value={newChannelName} onChange={(e) => setNewChannelName(e.target.value)} required className="bg-slate-900 border border-slate-700 rounded p-1.5" /><input placeholder="Topic (optional)" aria-label="Group topic" value={newChannelTopic} onChange={(e) => setNewChannelTopic(e.target.value)} className="bg-slate-900 border border-slate-700 rounded p-1.5" /><div className="flex gap-2"><button type="submit" className="flex-1 bg-sky-700 rounded py-1 font-semibold">Create group</button><button type="button" onClick={() => setShowAddChannel(false)} className="px-2 bg-slate-700 rounded">Cancel</button></div></form>}
             <div className="flex flex-col gap-2 text-xs">
-              {channels.map((ch) => <div key={ch.id} className="bg-slate-950/60 border border-slate-800 rounded p-2.5"><div className="flex justify-between"><span className="font-semibold">#{ch.name}</span><span className="text-slate-500">{ch.bridge_protocol}</span></div><div className="text-slate-400 text-[11px]">{ch.topic}</div><div className="text-slate-500 text-[11px]">{ch.member_count} members · {ch.event_count} events <Tip text="Members and events replicate with vector-clock causal ordering; the delivery ledger tracks who has confirmed receipt and retries only missing members." /></div></div>)}
+              {channels.map((ch) => <div key={ch.id} className="bg-slate-950/60 border border-slate-800 rounded p-2.5"><div className="flex justify-between"><span className="font-semibold">#{ch.name}</span><span className="text-slate-500">{ch.bridge_protocol}</span></div><div className="text-slate-400 text-[11px]">{ch.topic}</div><div className="text-slate-500 text-[11px]">{ch.member_count} members · {ch.event_count} events <Tip text="Members and events replicate with vector-clock causal ordering; the delivery ledger tracks who has confirmed receipt and retries only missing members." /></div><div className="flex gap-1.5 mt-1.5"><select value={handoverTargets[ch.id] || PROTOCOLS.find((p) => p !== ch.bridge_protocol)} onChange={(e) => setHandoverTargets((p) => ({ ...p, [ch.id]: e.target.value }))} aria-label={`Migrate ${ch.name} to bridge`} className="flex-1 min-w-0 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-[11px]" title="Target bridge for a signed channel migration (handover). The old bridge becomes the fallback and causal history is preserved.">{PROTOCOLS.filter((p) => p !== ch.bridge_protocol).map((p) => <option key={p} value={p}>{p}</option>)}</select><button type="button" onClick={() => handleHandover(ch.id, ch.bridge_protocol)} className="px-2 py-0.5 bg-slate-800 border border-slate-700 rounded font-semibold text-[11px]" title="Migrate this channel to the selected bridge with a signed handover (FederatedChannelBridgeHandover).">Migrate</button></div></div>)}
               <div className="flex gap-1.5 text-[11px]">
                 <select value={groupMemberId || contacts[0]?.unified_id || ''} onChange={(e) => setGroupMemberId(e.target.value)} aria-label="Person to add" className="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded px-1.5 py-1" title="Person (unified contact) to add to the selected channel below. Adding is idempotent.">{contacts.map((c) => <option key={c.unified_id} value={c.unified_id}>{c.name}</option>)}</select>
                 <button type="button" onClick={handleAddMember} className="px-2 py-1 bg-slate-800 border border-slate-700 rounded font-semibold" title="Add the selected person as a member of the selected group channel so posts broadcast to them.">Add member</button>
