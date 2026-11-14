@@ -1,0 +1,7 @@
+# Prevent target/debug/incremental from growing unbounded (observed 5.1 GB
+# and an ENOSPC build failure on a nearly-full system drive, 2026-11-14).
+# Incremental compilation is a local speed optimization; correctness and CI
+# are unaffected. Delete this file locally if you prefer incremental builds
+# and have the disk headroom.
+[build]
+incremental = false
