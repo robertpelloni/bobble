@@ -124,6 +124,15 @@ pub mod state {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct CallInfo {
+        pub route_id: String,
+        pub contact_name: String,
+        pub source_protocol: String,
+        pub target_protocol: String,
+        pub state: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct BackupSummary {
         pub manifest_id: String,
         pub total_chunks: usize,
@@ -189,6 +198,9 @@ pub mod state {
         pub outbox: tokio::sync::Mutex<omnicore_engine::outbox::OutboxManager>,
         // Last backup created this session (manifest + chunks, in memory).
         pub last_backup: Mutex<Option<(omnicore_engine::backup::BackupManifest, Vec<omnicore_engine::backup::EncryptedChunk>)>>,
+        // Cross-protocol call gateway + active call routes.
+        pub call_gateway: Mutex<omnicore_engine::call::CrossProtocolCallGateway>,
+        pub call_routes: Mutex<Vec<CallInfo>>,
     }
 
     impl Default for AppState {
@@ -371,6 +383,8 @@ pub mod state {
                 pending_federation: Mutex::new(None),
                 outbox: tokio::sync::Mutex::new(omnicore_engine::outbox::OutboxManager::new(omnicore_engine::outbox::RetryPolicy::default())),
                 last_backup: Mutex::new(None),
+                call_gateway: Mutex::new(omnicore_engine::call::CrossProtocolCallGateway::new()),
+                call_routes: Mutex::new(Vec::new()),
             }
         }
     }
@@ -765,7 +779,7 @@ fn get_system_metrics(state: State<'_, AppState>) -> SystemMetrics {
     SystemMetrics {
         version: env!("CARGO_PKG_VERSION").to_string(),
         active_bridges: active_count,
-        queued_messages: 0,
+        queued_messages: state.outbox.try_lock().map(|q| q.len()).unwrap_or(0),
         encryption: "SQLCipher (AES-256-GCM)".to_string(),
         uptime_secs: elapsed,
         server_running: running,
@@ -1200,13 +1214,15 @@ async fn get_network_status(state: State<'_, AppState>) -> Result<NetworkStatus,
     let action = omnicore_engine::telemetry::ApplianceConfig::default().evaluate_action(&telemetry);
     let channels = state.federation.lock().await.channel_count();
     let daemon_sessions = state.daemon.read().await.session_count().await;
+    let active_calls = state.call_gateway.lock().unwrap().active_gateway_count();
+    let outbox_queued = state.outbox.lock().await.len();
     Ok(NetworkStatus {
         federation_channels: channels,
         federation_description: "Federated group channels with vector-clock causal sync + delivery ledger".to_string(),
         mesh_peers: 0, mesh_description: "BLE / Wi-Fi Direct store-and-forward mesh (MeshRouter). No native HCI driver yet — see TODO.".to_string(),
         discovery_description: "LAN UDP beacon discovery with cached peers (PeerDiscovery)".to_string(),
-        active_calls: 0, call_description: "WebRTC / Matrix VoIP / Discord voice gateway; jitter buffer + simulcast ready".to_string(),
-        outbox_queued: state.outbox.lock().await.len(), outbox_description: "Offline outbox: failed sends queue here; Retry re-runs the active profile with exponential backoff, max 5 attempts (OutboxManager)".to_string(),
+        active_calls, call_description: "WebRTC / Matrix VoIP / Discord voice gateway; jitter buffer + simulcast ready. Start a call from Groups, mesh & calls.".to_string(),
+        outbox_queued, outbox_description: "Offline outbox: failed sends queue here; Retry re-runs the active profile with exponential backoff, max 5 attempts (OutboxManager)".to_string(),
         telemetry_summary: format!("CPU {:.0}°C · RAM {} / {} MB · Disk {:.1} GB free · Battery {}%", telemetry.health.cpu_temp_celsius, telemetry.health.memory_used_mb, telemetry.health.memory_total_mb, telemetry.health.disk_free_gb, telemetry.battery.as_ref().map(|b| b.percentage).unwrap_or(0)),
         appliance_action: format!("{:?}", action),
         reputation_description: "Peer trust tiers + spam rate limiting (ReputationEngine)".to_string(),
@@ -1371,6 +1387,54 @@ async fn diagnose_bridges_inner(state: &AppState) -> Vec<BridgeDiagnosis> {
     out
 }
 
+fn start_call_inner(state: &AppState, contact_name: &str, source_name: &str, target_name: &str) -> Result<CallInfo, String> {
+    use omnicore_engine::call::{CallSession, MediaType};
+    let source = omnicore_engine::models::ProtocolKind::from_str_name(source_name).ok_or_else(|| format!("Unknown protocol '{}'", source_name))?;
+    let target = omnicore_engine::models::ProtocolKind::from_str_name(target_name).ok_or_else(|| format!("Unknown protocol '{}'", target_name))?;
+    let seq = state.call_routes.lock().unwrap().len() + 1;
+    let call_id = format!("call_{}_{}", now_epoch(), seq);
+    // Two sessions bridged by the gateway: local leg on the source protocol,
+    // remote leg on the target protocol, SDP offer/answer to Connected.
+    let mut local = CallSession::new(&format!("{}:local", call_id), source, "local_user", contact_name, MediaType::AudioVideo);
+    local.set_offer("v=0 omnicore-offer").map_err(|e| e.to_string())?;
+    local.set_answer("v=0 omnicore-answer").map_err(|e| e.to_string())?;
+    let mut remote = CallSession::new(&format!("{}:remote", call_id), target, contact_name, "local_user", MediaType::AudioVideo);
+    remote.set_offer("v=0 omnicore-offer").map_err(|e| e.to_string())?;
+    remote.set_answer("v=0 omnicore-answer").map_err(|e| e.to_string())?;
+    let route_id = state.call_gateway.lock().unwrap().bridge_sessions(source, &local.call_id, target, &remote.call_id).map_err(|e| e.to_string())?;
+    let info = CallInfo { route_id: route_id.clone(), contact_name: contact_name.to_string(), source_protocol: source.as_str().to_string(), target_protocol: target.as_str().to_string(), state: "Connected".to_string() };
+    state.call_routes.lock().unwrap().push(info.clone());
+    push_activity(state, "CALL_STARTED", format!("Call to {} bridged {} -> {} ({})", contact_name, source.as_str(), target.as_str(), route_id));
+    Ok(info)
+}
+
+fn end_call_inner(state: &AppState, route_id: &str) -> Result<bool, String> {
+    let terminated = state.call_gateway.lock().unwrap().terminate_bridge(route_id);
+    if terminated {
+        let mut routes = state.call_routes.lock().unwrap();
+        if let Some(call) = routes.iter_mut().find(|c| c.route_id == route_id) {
+            call.state = "Ended".to_string();
+        }
+        push_activity(state, "CALL_ENDED", format!("Call route {} ended", route_id));
+    }
+    Ok(terminated)
+}
+
+#[tauri::command]
+fn start_call(state: State<'_, AppState>, contact_name: String, source_protocol: String, target_protocol: String) -> Result<CallInfo, String> {
+    start_call_inner(&state, &contact_name, &source_protocol, &target_protocol)
+}
+
+#[tauri::command]
+fn end_call(state: State<'_, AppState>, route_id: String) -> Result<bool, String> {
+    end_call_inner(&state, &route_id)
+}
+
+#[tauri::command]
+fn get_calls(state: State<'_, AppState>) -> Vec<CallInfo> {
+    state.call_routes.lock().unwrap().clone()
+}
+
 #[tauri::command]
 async fn diagnose_bridges(state: State<'_, AppState>) -> Result<Vec<BridgeDiagnosis>, String> {
     Ok(diagnose_bridges_inner(&state).await)
@@ -1524,6 +1588,9 @@ fn main() {
             post_channel_message,
             retry_outbox,
             diagnose_bridges,
+            start_call,
+            end_call,
+            get_calls,
             run_bridge_probe,
             get_daemon_status,
             subscribe_daemon_events,
@@ -1608,6 +1675,20 @@ mod tests {
         let bridges = state2.bridges.lock().unwrap();
         assert!(bridges.iter().find(|b| b.protocol == "Nostr").unwrap().connected);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_call_lifecycle_via_gateway() {
+        let state = AppState::default();
+        let call = crate::start_call_inner(&state, "Alice Montgomery", "Signal", "Matrix").unwrap();
+        assert_eq!(call.state, "Connected");
+        assert_eq!(state.call_gateway.lock().unwrap().active_gateway_count(), 1);
+        // Unknown protocol is rejected, never bridged.
+        assert!(crate::start_call_inner(&state, "Alice Montgomery", "CarrierPigeon", "Matrix").is_err());
+        assert!(crate::end_call_inner(&state, &call.route_id).unwrap());
+        assert_eq!(state.call_gateway.lock().unwrap().active_gateway_count(), 0);
+        // Ending twice reports false instead of pretending success.
+        assert!(!crate::end_call_inner(&state, &call.route_id).unwrap());
     }
 
     #[tokio::test]

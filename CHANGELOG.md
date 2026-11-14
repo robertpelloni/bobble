@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 1.14.0:
+  - Calls in the dashboard: Call button in Groups, mesh & calls starts an audio/video call to the selected person, bridging their primary to fallback protocol through CrossProtocolCallGateway with SDP offer/answer negotiation to Connected; active calls list with End call (terminate_bridge). Header/network metrics now source queued_messages from the real outbox and active_calls from the gateway instead of hardcoded zeros.
 - 1.13.1:
   - Probe all is real: run_bridge_probe now executes MultipathRouter::probe_and_recover_circuits against open/half-open circuits in the shared registry and reports each recovery (or honestly reports that none needed probing), instead of only logging that a probe was sent.
 - 1.13.0:

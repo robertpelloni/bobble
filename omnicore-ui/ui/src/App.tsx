@@ -23,6 +23,7 @@ interface ActivityEvent { id: string; kind: string; detail: string; timestamp: s
 interface ChannelInfo { id: string; name: string; topic: string; bridge_protocol: string; member_count: number; event_count: number; }
 interface DaemonStatus { url: string; running: boolean; sessions: number; subscribed_channel: string | null; }
 interface BridgeDiagnosis { protocol: string; total_attempts: number; successful_attempts: number; average_latency_ms: number; consecutive_failures: number; circuit_state: string; anomalies: string[]; }
+interface CallInfo { route_id: string; contact_name: string; source_protocol: string; target_protocol: string; state: string; }
 
 const PROTOCOLS = ['Signal', 'Matrix', 'Discord', 'Simplex', 'Tox', 'iMessage', 'SMS', 'Nostr'];
 
@@ -141,6 +142,7 @@ export default function App() {
   const [newChannelTopic, setNewChannelTopic] = useState('');
   const [handoverTargets, setHandoverTargets] = useState<Record<string, string>>({});
   const [groupMemberId, setGroupMemberId] = useState('');
+  const [calls, setCalls] = useState<CallInfo[]>([]);
   const [diagnoses, setDiagnoses] = useState<BridgeDiagnosis[]>([]);
   const [groupPostText, setGroupPostText] = useState('');
   const [groupChannelId, setGroupChannelId] = useState('chan_ops');
@@ -289,6 +291,23 @@ export default function App() {
     } else {
       setChannels((p) => p.map((x) => (x.id === channelId ? { ...x, bridge_protocol: target } : x)));
       logLocal('BRIDGE_HANDOVER', `Channel ${channelId} migrated to ${target} (preview)`);
+    }
+  };
+
+  const handleStartCall = () => {
+    if (isTauri) {
+      invoke('start_call', { contactName: selectedContact.name, sourceProtocol: primaryProtocol, targetProtocol: fallbackProtocol }).then((c) => { setCalls((p) => [...p, c as CallInfo]); invoke('get_activity_log').then((a) => setActivity(a as ActivityEvent[])).catch(console.error); invoke('get_network_status').then((r) => setNetwork(r as NetworkStatus)).catch(console.error); }).catch((e) => setNotice(`Start call failed: ${e}`));
+    } else {
+      setCalls((p) => [...p, { route_id: `preview_${Date.now()}`, contact_name: selectedContact.name, source_protocol: primaryProtocol, target_protocol: fallbackProtocol, state: 'Connected' }]);
+      logLocal('CALL_STARTED', `Call to ${selectedContact.name} bridged ${primaryProtocol} -> ${fallbackProtocol} (preview)`);
+    }
+  };
+  const handleEndCall = (routeId: string) => {
+    if (isTauri) {
+      invoke('end_call', { routeId }).then(() => { setCalls((p) => p.map((c) => (c.route_id === routeId ? { ...c, state: 'Ended' } : c))); invoke('get_network_status').then((r) => setNetwork(r as NetworkStatus)).catch(console.error); }).catch((e) => setNotice(`End call failed: ${e}`));
+    } else {
+      setCalls((p) => p.map((c) => (c.route_id === routeId ? { ...c, state: 'Ended' } : c)));
+      logLocal('CALL_ENDED', `Call route ${routeId} ended (preview)`);
     }
   };
 
@@ -476,6 +495,10 @@ export default function App() {
               <p className="text-[11px] text-slate-400 leading-snug"><strong className="text-slate-300">Federation:</strong> {network.federation_description} ({network.federation_channels} group{network.federation_channels === 1 ? '' : 's'} here)</p>
               <p className="text-[11px] text-slate-400 leading-snug"><strong className="text-slate-300">Mesh:</strong> {network.mesh_description} Peers nearby: {network.mesh_peers}. <strong className="text-slate-300">Discovery:</strong> {network.discovery_description}</p>
               <p className="text-[11px] text-slate-400 leading-snug"><strong className="text-slate-300">Calls:</strong> {network.call_description} Active calls: {network.active_calls}.</p>
+              <div className="flex gap-1.5 text-[11px]">
+                <button type="button" onClick={handleStartCall} className="px-2 py-1 bg-sky-700 hover:bg-sky-600 rounded font-semibold" title={`Start an audio/video call to the selected person (${selectedContact.name}), bridging ${primaryProtocol} to ${fallbackProtocol} through the cross-protocol call gateway with SDP offer/answer negotiation.`}>Call {selectedContact.name.split(' ')[0]} ({primaryProtocol} → {fallbackProtocol})</button>
+              </div>
+              {calls.map((c) => <div key={c.route_id} className="flex items-center justify-between gap-2 bg-slate-950/60 border border-slate-800 rounded px-2 py-1.5 text-[11px]"><span>{c.contact_name} · {c.source_protocol} → {c.target_protocol} · {c.state}</span>{c.state === 'Connected' && <button type="button" onClick={() => handleEndCall(c.route_id)} className="px-2 py-0.5 bg-rose-950/60 text-rose-300 border border-rose-800 rounded font-semibold" title="Terminate this gateway call route.">End call</button>}</div>)}
               <p className="text-[11px] text-slate-400 leading-snug"><strong className="text-slate-300">Anti-spam:</strong> {network.reputation_description}</p>
             </div>
           </Section>
