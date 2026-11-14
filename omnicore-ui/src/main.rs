@@ -158,7 +158,9 @@ pub mod state {
         pub activity: Mutex<Vec<ActivityEvent>>,
         // Group channels live in the real FederationManager (vector clocks,
         // members, event history), not a UI-local list.
-        pub federation: Mutex<omnicore_engine::federation::FederationManager>,
+        pub federation: tokio::sync::Mutex<omnicore_engine::federation::FederationManager>,
+        // Router shared with the daemon so group posts can broadcast.
+        pub router: tokio::sync::RwLock<Option<std::sync::Arc<omnicore_engine::router::MultipathRouter>>>,
     }
 
     impl Default for AppState {
@@ -329,7 +331,7 @@ pub mod state {
                     ActivityEvent { id: "evt_2".to_string(), kind: "MULTI_ROUTE".to_string(), detail: "msg_2 dual-path Signal primary, Matrix fallback armed".to_string(), timestamp: "10:43 AM".to_string() },
                     ActivityEvent { id: "evt_3".to_string(), kind: "SYNC_TOKEN".to_string(), detail: "Matrix homeserver sync token refreshed".to_string(), timestamp: "10:45 AM".to_string() },
                 ]),
-                federation: Mutex::new({
+                federation: tokio::sync::Mutex::new({
                     let mut mgr = omnicore_engine::federation::FederationManager::new();
                     mgr.create_channel("chan_ops", "ops-room", "Federated operations channel", "local_user");
                     if let Some(ch) = mgr.get_channel_mut("chan_ops") {
@@ -337,6 +339,7 @@ pub mod state {
                     }
                     mgr
                 }),
+                router: tokio::sync::RwLock::new(None),
             }
         }
     }
@@ -561,7 +564,9 @@ async fn init_engine(app: AppHandle, state: State<'_, AppState>) -> Result<Strin
     if !daemon.is_running {
         let _ = daemon.start().await;
     }
-    daemon.set_router(std::sync::Arc::new(router));
+    let router_arc = std::sync::Arc::new(router);
+    *state.router.write().await = Some(router_arc.clone());
+    daemon.set_router(router_arc);
     daemon.register_session(DESKTOP_SESSION_ID, "desktop_ui", now_epoch()).await;
     let server_clone = daemon.clone();
     drop(daemon);
@@ -989,7 +994,7 @@ fn export_identity_card() -> Result<String, String> {
 async fn get_network_status(state: State<'_, AppState>) -> Result<NetworkStatus, String> {
     let telemetry = omnicore_engine::telemetry::TelemetryCollector::new().collect();
     let action = omnicore_engine::telemetry::ApplianceConfig::default().evaluate_action(&telemetry);
-    let channels = state.federation.lock().unwrap().channel_count();
+    let channels = state.federation.lock().await.channel_count();
     let daemon_sessions = state.daemon.read().await.session_count().await;
     Ok(NetworkStatus {
         federation_channels: channels,
@@ -1021,8 +1026,8 @@ fn channel_to_info(ch: &omnicore_engine::federation::FederatedChannel) -> Channe
     }
 }
 
-fn create_federated_channel(state: &AppState, name: &str, topic: &str, bridge_protocol: &str) -> ChannelInfo {
-    let mut mgr = state.federation.lock().unwrap();
+async fn create_federated_channel(state: &AppState, name: &str, topic: &str, bridge_protocol: &str) -> ChannelInfo {
+    let mut mgr = state.federation.lock().await;
     let id = format!("chan_{}_{}", mgr.channel_count() + 1, name.to_ascii_lowercase().replace(' ', "-"));
     mgr.create_channel(&id, name, topic, "local_user");
     if let Some(ch) = mgr.get_channel_mut(&id) {
@@ -1037,13 +1042,42 @@ fn create_federated_channel(state: &AppState, name: &str, topic: &str, bridge_pr
 }
 
 #[tauri::command]
-fn get_channels(state: State<'_, AppState>) -> Vec<ChannelInfo> {
-    state.federation.lock().unwrap().list_channels().iter().map(|c| channel_to_info(c)).collect()
+async fn get_channels(state: State<'_, AppState>) -> Result<Vec<ChannelInfo>, String> {
+    Ok(state.federation.lock().await.list_channels().iter().map(|c| channel_to_info(c)).collect())
 }
 
 #[tauri::command]
-fn create_channel(state: State<'_, AppState>, name: String, topic: String, bridge_protocol: String) -> ChannelInfo {
-    create_federated_channel(&state, &name, &topic, &bridge_protocol)
+async fn create_channel(state: State<'_, AppState>, name: String, topic: String, bridge_protocol: String) -> Result<ChannelInfo, String> {
+    Ok(create_federated_channel(&state, &name, &topic, &bridge_protocol).await)
+}
+
+/// Posts a message to a federated group channel as local_user. The event is
+/// recorded in the channel's causal history, then broadcast to other members
+/// via the shared MultipathRouter when one is attached (engine init).
+#[tauri::command]
+async fn post_channel_message(state: State<'_, AppState>, channel_id: String, content: String) -> Result<ChannelInfo, String> {
+    if content.trim().is_empty() {
+        return Err("Message content cannot be empty".to_string());
+    }
+    let mut mgr = state.federation.lock().await;
+    let (event, primary, fallbacks) = {
+        let channel = mgr.get_channel_mut(&channel_id).ok_or_else(|| format!("Channel '{}' not found", channel_id))?;
+        let event = channel.post_message("local_user", &content).map_err(|e| e.to_string())?;
+        let primary = channel.active_bridge.unwrap_or(omnicore_engine::models::ProtocolKind::Matrix);
+        let fallbacks = channel.active_fallbacks.clone();
+        (event, primary, fallbacks)
+    };
+    let mut delivered_members = 0usize;
+    if let Some(router) = state.router.read().await.clone() {
+        match mgr.broadcast_event_via_router(&channel_id, &event, &router, primary, &fallbacks).await {
+            Ok(results) => delivered_members = results.len(),
+            Err(e) => push_activity(&state, "FEDERATED_POST_ERROR", format!("Broadcast for {} failed: {}", channel_id, e)),
+        }
+    }
+    let info = mgr.get_channel(&channel_id).map(channel_to_info).ok_or_else(|| "Channel vanished after post".to_string())?;
+    drop(mgr);
+    push_activity(&state, "FEDERATED_POST", format!("Posted to #{} (event recorded; broadcast delivered to {} other member(s))", info.name, delivered_members));
+    Ok(info)
 }
 
 #[tauri::command]
@@ -1166,6 +1200,7 @@ fn main() {
             get_activity_log,
             get_channels,
             create_channel,
+            post_channel_message,
             run_bridge_probe,
             get_daemon_status,
             subscribe_daemon_events,
@@ -1252,15 +1287,23 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    #[test]
-    fn test_federated_channel_creation_uses_manager() {
+    #[tokio::test]
+    async fn test_federated_channel_creation_uses_manager() {
         let state = AppState::default();
-        assert_eq!(state.federation.lock().unwrap().channel_count(), 1);
-        let created = crate::create_federated_channel(&state, "Family Chat", "Relatives", "Signal");
+        assert_eq!(state.federation.lock().await.channel_count(), 1);
+        let created = crate::create_federated_channel(&state, "Family Chat", "Relatives", "Signal").await;
         assert_eq!(created.name, "Family Chat");
         assert_eq!(created.bridge_protocol, "Signal");
         assert_eq!(created.member_count, 1);
-        let mgr = state.federation.lock().unwrap();
+        // Posting records a causal event in the channel history.
+        {
+            let mut mgr = state.federation.lock().await;
+            let ch = mgr.get_channel_mut(&created.id).unwrap();
+            let event = ch.post_message("local_user", "hello group").unwrap();
+            assert_eq!(event.payload, "hello group");
+            assert_eq!(ch.event_history.len(), 1);
+        }
+        let mgr = state.federation.lock().await;
         assert_eq!(mgr.channel_count(), 2);
         assert!(mgr.get_channel(&created.id).is_some());
         assert_eq!(mgr.list_channels().len(), 2);

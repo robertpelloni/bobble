@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 1.7.0:
+  - Group posting: dashboard Groups panel has a channel composer; post_channel_message records the post as a causal FederatedChannel event (vector clock incremented) and broadcasts it to other members via the shared MultipathRouter (broadcast_event_via_router), reporting delivered member count as FEDERATED_POST in Activity. Router is now shared between daemon and group posts.
 - 1.6.1:
   - Settings persistence: routing profile, Tor on/off, and per-bridge connected state are stored in the SQLCipher key_store (settings/desktop) and restored on launch, so user choices survive restarts.
 - 1.6.0:
