@@ -166,3 +166,7 @@ Coordinator identity for cross-agent handoff: **[muse-wonder-1.0 in Muse Code in
 - Dependabot PR #5 (expo 51->58, react-native 0.74->0.88) NOT merged: its Mobile typecheck CI fails with an npm peer conflict (@types/react ~18 pinned vs ^19 required by react-native 0.88). It is a major migration (React 19, types, babel/metro config), not a patch bump — treat as its own task if wanted. The other dependabot branch (omnicore-ui/ui) has no diff vs main.
 - Mobile verified on current deps: npx expo export --platform android succeeds (537 modules, 1.51 MB Hermes bundle). dist/ was cleaned, not committed.
 
+
+### Session 2026-11-14 (v1.6.1) — [muse-wonder-1.0 in Muse Code in C:\Users\hyper\workspace\bobble on laptop]
+- Settings persistence shipped (see CHANGELOG 1.6.1). Environment note: a workspace test run hit ENOSPC from target/debug/incremental (5.1 GB); cleared it (regenerable). C: had ~13 GB free against a 23.5 GB target dir — consider cargo clean or moving CARGO_TARGET_DIR to a roomier drive (D:/J: have 100+ GB free).
+

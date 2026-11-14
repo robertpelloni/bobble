@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 1.6.1:
+  - Settings persistence: routing profile, Tor on/off, and per-bridge connected state are stored in the SQLCipher key_store (settings/desktop) and restored on launch, so user choices survive restarts.
 - 1.6.0:
   - Group channels are backed by the real FederationManager: the desktop no longer keeps a UI-local channel list. Channels carry vector clocks, members, event history, and active bridge from omnicore-engine/src/federation.rs (new FederationManager::list_channels/channel_count); creating a group registers it in the manager with its bridge set. Seeded ops-room now honestly reports 1 member / 0 events.
 - 1.5.2:

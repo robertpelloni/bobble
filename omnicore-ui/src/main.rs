@@ -449,8 +449,38 @@ fn init_database_at(state: &AppState, path: &std::path::Path, key: &str) -> Resu
         }
         summary = format!("SQLCipher DB restored {} contact(s), {} message(s)", existing.len(), msg_count);
     }
+    // Restore persisted settings (routing profile, Tor, bridge toggles).
+    if let Some(profile) = load_setting(&db, "routing_profile") {
+        *state.routing_profile.lock().unwrap() = profile;
+    }
+    if let Some(tor) = load_setting(&db, "tor_enabled") {
+        *state.tor_enabled.lock().unwrap() = tor == "1";
+    }
+    {
+        let mut bridges = state.bridges.lock().unwrap();
+        for b in bridges.iter_mut() {
+            if let Some(v) = load_setting(&db, &format!("bridge_connected:{}", b.protocol)) {
+                b.connected = v == "1";
+                b.status = if b.connected { "Connected".to_string() } else { "Disconnected".to_string() };
+            }
+        }
+    }
     *state.db.lock().unwrap() = Some(db);
     Ok(summary)
+}
+
+/// Settings live in the SQLCipher key_store (protocol="settings",
+/// account="desktop") so no extra table is needed. Values are small strings.
+fn persist_setting(state: &AppState, key: &str, value: &str) {
+    let db_guard = state.db.lock().unwrap();
+    let Some(db) = db_guard.as_ref() else { return };
+    if let Err(e) = db.save_key_material("settings", "desktop", key, value.as_bytes()) {
+        push_activity(state, "DB_PERSIST_ERROR", format!("Failed to persist setting {}: {}", key, e));
+    }
+}
+
+fn load_setting(db: &omnicore_engine::db::Database, key: &str) -> Option<String> {
+    db.get_key_material("settings", "desktop", key).ok().flatten().and_then(|b| String::from_utf8(b).ok())
 }
 
 /// Persists one outgoing message. DB failures are logged to Activity
@@ -809,7 +839,12 @@ fn toggle_bridge(state: State<'_, AppState>, protocol: String) -> Result<BridgeS
             } else {
                 "Disconnected".to_string()
             };
-            return Ok(bridge.clone());
+            let updated = bridge.clone();
+            let key = format!("bridge_connected:{}", updated.protocol);
+            let value = if updated.connected { "1" } else { "0" };
+            drop(bridges);
+            persist_setting(&state, &key, value);
+            return Ok(updated);
         }
     }
     Err(format!("Bridge for protocol '{}' not found", protocol))
@@ -906,6 +941,7 @@ fn get_routing_profiles() -> Vec<RoutingProfileInfo> {
 #[tauri::command]
 fn set_routing_profile(state: State<'_, AppState>, profile_id: String) -> String {
     *state.routing_profile.lock().unwrap() = profile_id.clone();
+    persist_setting(&state, "routing_profile", &profile_id);
     push_activity(&state, "ROUTING_PROFILE", format!("Active routing profile set to {}", profile_id));
     profile_id
 }
@@ -935,6 +971,7 @@ fn toggle_tor(state: State<'_, AppState>) -> bool {
     *on = !*on;
     let now = *on;
     drop(on);
+    persist_setting(&state, "tor_enabled", if now { "1" } else { "0" });
     push_activity(&state, if now { "TOR_ON" } else { "TOR_OFF" }, format!("Tor SOCKS5 routing {}", if now { "enabled (socks5h://127.0.0.1:9050)" } else { "disabled" }));
     now
 }
@@ -1192,6 +1229,27 @@ mod tests {
         // Unknown protocols are rejected, never silently routed.
         let bad = crate::execute_routing_profile(&state, "optimal_cascade", "X", "hi", "CarrierPigeon", "Matrix").await;
         assert!(bad.is_err());
+    }
+
+    #[test]
+    fn test_settings_persistence_roundtrip() {
+        let path = std::env::temp_dir().join(format!("omnicore_settings_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let state = AppState::default();
+        crate::init_database_at(&state, &path, "test_key").unwrap();
+        *state.routing_profile.lock().unwrap() = "hedged_racing".to_string();
+        crate::persist_setting(&state, "routing_profile", "hedged_racing");
+        crate::persist_setting(&state, "tor_enabled", "1");
+        crate::persist_setting(&state, "bridge_connected:Nostr", "1");
+        *state.db.lock().unwrap() = None;
+        // Fresh state restores settings from SQLCipher.
+        let state2 = AppState::default();
+        crate::init_database_at(&state2, &path, "test_key").unwrap();
+        assert_eq!(state2.routing_profile.lock().unwrap().as_str(), "hedged_racing");
+        assert!(*state2.tor_enabled.lock().unwrap());
+        let bridges = state2.bridges.lock().unwrap();
+        assert!(bridges.iter().find(|b| b.protocol == "Nostr").unwrap().connected);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
