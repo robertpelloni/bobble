@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 1.10.0:
+  - Offline outbox wired: failed sends queue in OutboxManager (OUTBOX_QUEUED) instead of dying; the Engine panel shows the real queued count and a Retry outbox button re-runs ready messages through the active routing profile, appending and persisting successes (OUTBOX_RETRY_OK). Failures requeue with exponential backoff and drop after 5 attempts (OUTBOX_DROPPED), all visible in Activity.
 - 1.9.0:
   - Federation persistence: group channels (members, causal event history, active bridge, handovers) are serialized to the SQLCipher key_store after every group mutation (create, add member, post, handover) and restored on launch (FEDERATION_RESTORED in Activity). New engine FederationManager::insert_channel supports snapshot restore. Covered by test_federation_snapshot_roundtrip.
 - 1.8.0:

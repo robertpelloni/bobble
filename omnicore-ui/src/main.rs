@@ -164,6 +164,9 @@ pub mod state {
         // Federation snapshot loaded from DB (sync context), applied to the
         // async federation mutex by init_engine.
         pub pending_federation: Mutex<Option<Vec<omnicore_engine::federation::FederatedChannel>>>,
+        // Offline outbox: failed sends queue here with backoff retry.
+        // Payload bytes are JSON {recipient, content, primary, fallback}.
+        pub outbox: tokio::sync::Mutex<omnicore_engine::outbox::OutboxManager>,
     }
 
     impl Default for AppState {
@@ -344,6 +347,7 @@ pub mod state {
                 }),
                 router: tokio::sync::RwLock::new(None),
                 pending_federation: Mutex::new(None),
+                outbox: tokio::sync::Mutex::new(omnicore_engine::outbox::OutboxManager::new(omnicore_engine::outbox::RetryPolicy::default())),
             }
         }
     }
@@ -483,6 +487,75 @@ fn init_database_at(state: &AppState, path: &std::path::Path, key: &str) -> Resu
     }
     *state.db.lock().unwrap() = Some(db);
     Ok(summary)
+}
+
+/// Queues a failed send in the offline outbox for backoff retry.
+async fn queue_failed_outgoing(state: &AppState, recipient: &str, content: &str, primary: &str, fallback: &str) {
+    let contact_id = state.contacts.lock().unwrap().iter().find(|c| c.name == recipient).map(|c| c.id).unwrap_or(0);
+    let payload = serde_json::json!({"recipient": recipient, "content": content, "primary": primary, "fallback": fallback});
+    let candidates: Vec<omnicore_engine::models::ProtocolKind> = [primary, fallback].iter().filter_map(|p| omnicore_engine::models::ProtocolKind::from_str_name(p)).collect();
+    let id = format!("outbox_{}_{}", recipient, now_epoch());
+    state.outbox.lock().await.enqueue(&id, contact_id, payload.to_string().into_bytes(), candidates);
+    let queued = state.outbox.lock().await.len();
+    push_activity(state, "OUTBOX_QUEUED", format!("Failed send to {} queued for retry ({} in outbox)", recipient, queued));
+}
+
+/// Retries every ready outbox message once through the active routing
+/// profile. Successes are appended + persisted; failures requeue with
+/// backoff until the retry policy drops them (OUTBOX_DROPPED). Returns the
+/// remaining queue length.
+async fn retry_outbox_inner(state: &AppState) -> usize {
+    let now = now_epoch();
+    let ready = state.outbox.lock().await.pop_ready_messages(now);
+    let profile = state.routing_profile.lock().unwrap().clone();
+    for msg in ready {
+        let parsed: Result<serde_json::Value, String> = serde_json::from_slice(&msg.payload_bytes).map_err(|e| e.to_string());
+        let attempt = match parsed {
+            Ok(v) => {
+                let recipient = v["recipient"].as_str().unwrap_or_default().to_string();
+                let content = v["content"].as_str().unwrap_or_default().to_string();
+                let primary = v["primary"].as_str().unwrap_or("Signal").to_string();
+                let fallback = v["fallback"].as_str().unwrap_or("Matrix").to_string();
+                match execute_routing_profile(state, &profile, &recipient, &content, &primary, &fallback).await {
+                    Ok((used, delivery)) => {
+                        {
+                            let mut messages = state.messages.lock().unwrap();
+                            let next_id = format!("msg_{}", messages.len() + 1);
+                            messages.push(MessageItem {
+                                id: next_id,
+                                sender: "You".to_string(),
+                                recipient: recipient.clone(),
+                                content: content.clone(),
+                                protocol: format!("{} via {} (outbox retry)", used, profile),
+                                timestamp: "Just now".to_string(),
+                                is_outgoing: true,
+                                status: delivery.clone(),
+                            });
+                        }
+                        persist_outgoing(state, &recipient, &used, &content, &delivery);
+                        push_activity(state, "OUTBOX_RETRY_OK", format!("Outbox message to {} delivered on {} (attempt {})", recipient, used, msg.attempts + 1));
+                        None
+                    }
+                    Err(e) => Some((e, msg)),
+                }
+            }
+            Err(e) => Some((format!("Corrupt outbox payload: {}", e), msg)),
+        };
+        if let Some((err, failed_msg)) = attempt {
+            let mut outbox = state.outbox.lock().await;
+            if outbox.record_failure(failed_msg, now_epoch()) {
+                push_activity(state, "OUTBOX_RETRY_FAILED", format!("Outbox retry failed, requeued with backoff: {}", err));
+            } else {
+                push_activity(state, "OUTBOX_DROPPED", format!("Outbox message dropped after max attempts: {}", err));
+            }
+        }
+    }
+    state.outbox.lock().await.len()
+}
+
+#[tauri::command]
+async fn retry_outbox(state: State<'_, AppState>) -> Result<usize, String> {
+    Ok(retry_outbox_inner(&state).await)
 }
 
 /// Settings live in the SQLCipher key_store (protocol="settings",
@@ -839,6 +912,7 @@ async fn send_message(
         }
         Err(e) => {
             push_activity(&state, "ROUTE_FAILED", format!("Message to {} failed via profile {}: {}", recipient, profile, e));
+            queue_failed_outgoing(&state, &recipient, &content, &protocol, &fallback_protocol).await;
             (protocol.clone(), format!("failed: {}", e))
         }
     };
@@ -1043,7 +1117,7 @@ async fn get_network_status(state: State<'_, AppState>) -> Result<NetworkStatus,
         mesh_peers: 0, mesh_description: "BLE / Wi-Fi Direct store-and-forward mesh (MeshRouter). No native HCI driver yet — see TODO.".to_string(),
         discovery_description: "LAN UDP beacon discovery with cached peers (PeerDiscovery)".to_string(),
         active_calls: 0, call_description: "WebRTC / Matrix VoIP / Discord voice gateway; jitter buffer + simulcast ready".to_string(),
-        outbox_queued: 0, outbox_description: "Offline outbox: exponential backoff, max 5 attempts (OutboxManager)".to_string(),
+        outbox_queued: state.outbox.lock().await.len(), outbox_description: "Offline outbox: failed sends queue here; Retry re-runs the active profile with exponential backoff, max 5 attempts (OutboxManager)".to_string(),
         telemetry_summary: format!("CPU {:.0}°C · RAM {} / {} MB · Disk {:.1} GB free · Battery {}%", telemetry.health.cpu_temp_celsius, telemetry.health.memory_used_mb, telemetry.health.memory_total_mb, telemetry.health.disk_free_gb, telemetry.battery.as_ref().map(|b| b.percentage).unwrap_or(0)),
         appliance_action: format!("{:?}", action),
         reputation_description: "Peer trust tiers + spam rate limiting (ReputationEngine)".to_string(),
@@ -1298,6 +1372,7 @@ fn main() {
             handover_channel,
             add_channel_member,
             post_channel_message,
+            retry_outbox,
             run_bridge_probe,
             get_daemon_status,
             subscribe_daemon_events,
@@ -1382,6 +1457,21 @@ mod tests {
         let bridges = state2.bridges.lock().unwrap();
         assert!(bridges.iter().find(|b| b.protocol == "Nostr").unwrap().connected);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_outbox_queue_and_retry() {
+        let state = AppState::default();
+        // Queue a deliverable message and retry it through the real router.
+        crate::queue_failed_outgoing(&state, "Alice Montgomery", "retry me", "Signal", "Matrix").await;
+        assert_eq!(state.outbox.lock().await.len(), 1);
+        let remaining = crate::retry_outbox_inner(&state).await;
+        assert_eq!(remaining, 0);
+        assert!(state.messages.lock().unwrap().iter().any(|m| m.content == "retry me"));
+        // An undeliverable message requeues with backoff instead of vanishing.
+        crate::queue_failed_outgoing(&state, "Alice Montgomery", "never delivers", "CarrierPigeon", "Matrix").await;
+        let remaining = crate::retry_outbox_inner(&state).await;
+        assert_eq!(remaining, 1, "failed retry must requeue with backoff");
     }
 
     #[tokio::test]
