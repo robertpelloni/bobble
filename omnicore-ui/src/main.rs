@@ -1376,10 +1376,30 @@ async fn diagnose_bridges(state: State<'_, AppState>) -> Result<Vec<BridgeDiagno
     Ok(diagnose_bridges_inner(&state).await)
 }
 
+/// Runs the engine's real heartbeat prober against open/half-open circuits
+/// in the shared router and reports each recovery outcome.
+async fn probe_bridges_inner(state: &AppState) -> Vec<String> {
+    use omnicore_engine::models::ProtocolKind as P;
+    let router = match state.router.read().await.clone() {
+        Some(stored) => stored,
+        None => std::sync::Arc::new(build_router(state, &[P::Signal, P::Matrix]).await),
+    };
+    let results = router.probe_and_recover_circuits(now_epoch()).await;
+    if results.is_empty() {
+        push_activity(state, "HEALTH_PROBE", "Heartbeat probe complete: no open/half-open circuits needed probing (BridgeHeartbeatProber)".to_string());
+        vec!["none".to_string()]
+    } else {
+        results.iter().map(|(proto, recovered)| {
+            push_activity(state, "HEALTH_PROBE", format!("Heartbeat probe {}: {}", proto.as_str(), if *recovered { "recovered, circuit closed" } else { "still failing" }));
+            format!("{}:{}", proto.as_str(), recovered)
+        }).collect()
+    }
+}
+
 #[tauri::command]
-fn run_bridge_probe(state: State<'_, AppState>) -> Vec<ActivityEvent> {
-    push_activity(&state, "HEALTH_PROBE", "Heartbeat probe sent to all open/half-open circuits (BridgeHeartbeatProber)".to_string());
-    state.activity.lock().unwrap().clone()
+async fn run_bridge_probe(state: State<'_, AppState>) -> Result<Vec<ActivityEvent>, String> {
+    probe_bridges_inner(&state).await;
+    Ok(state.activity.lock().unwrap().clone())
 }
 
 #[tauri::command]
@@ -1588,6 +1608,30 @@ mod tests {
         let bridges = state2.bridges.lock().unwrap();
         assert!(bridges.iter().find(|b| b.protocol == "Nostr").unwrap().connected);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_probe_recovers_tripped_circuit() {
+        let state = AppState::default();
+        let router = crate::build_router(&state, &[omnicore_engine::models::ProtocolKind::Matrix]).await;
+        let router = std::sync::Arc::new(router);
+        // Trip the Matrix circuit with 3 consecutive failures.
+        {
+            let registry = router.registry();
+            let mut guard = registry.write().await;
+            // Failures recorded 120s ago so the 30s circuit cooldown has expired.
+            let past = crate::now_epoch() - 120;
+            guard.record_delivery_metrics(omnicore_engine::models::ProtocolKind::Matrix, 20, false, past);
+            guard.record_delivery_metrics(omnicore_engine::models::ProtocolKind::Matrix, 20, false, past);
+            guard.record_delivery_metrics(omnicore_engine::models::ProtocolKind::Matrix, 20, false, past);
+        }
+        *state.router.write().await = Some(router);
+        // Cooldown has expired, so the heartbeat probe must recover Matrix.
+        let results = crate::probe_bridges_inner(&state).await;
+        assert!(results.iter().any(|r| r == "Matrix:true"), "probe results: {:?}", results);
+        let diagnoses = crate::diagnose_bridges_inner(&state).await;
+        let matrix = diagnoses.iter().find(|d| d.protocol == "Matrix").unwrap();
+        assert_eq!(matrix.circuit_state, "Closed");
     }
 
     #[tokio::test]

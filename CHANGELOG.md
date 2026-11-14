@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 1.13.1:
+  - Probe all is real: run_bridge_probe now executes MultipathRouter::probe_and_recover_circuits against open/half-open circuits in the shared registry and reports each recovery (or honestly reports that none needed probing), instead of only logging that a probe was sent.
 - 1.13.0:
   - Routing metrics now persist across sends: execute_routing_profile reuses the router stored at engine init instead of building a fresh BridgeRegistry per message (which discarded circuit/latency metrics every send). New Diagnose button in Bridges runs BridgeHealthMonitor over the accumulated metrics (MultipathRouter::registry accessor added), showing attempts, latency, circuit state, and anomalies per bridge; never-attempted bridges honestly report CandidateStarvation.
 - 1.12.0:
