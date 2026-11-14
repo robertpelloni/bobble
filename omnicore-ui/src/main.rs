@@ -150,6 +150,7 @@ pub mod state {
         // (The engine daemon is session/RPC logic; a real TCP listener is
         // still future work — mobile connects over WebSocket separately.)
         pub daemon: tokio::sync::RwLock<omnicore_engine::server::WebSocketServer>,
+        pub daemon_listener_started: Mutex<bool>,
         pub activity: Mutex<Vec<ActivityEvent>>,
         pub channels: Mutex<Vec<ChannelInfo>>,
     }
@@ -315,6 +316,7 @@ pub mod state {
                 canary_detector: tokio::sync::Mutex::new(omnicore_engine::router::CanaryDropDetector::new(30)),
                 receipt_tracker: tokio::sync::Mutex::new(omnicore_engine::router::ReceiptTracker::new(30)),
                 daemon: tokio::sync::RwLock::new(omnicore_engine::server::WebSocketServer::new("127.0.0.1", 8765)),
+                daemon_listener_started: Mutex::new(false),
                 activity: Mutex::new(vec![
                     ActivityEvent { id: "evt_1".to_string(), kind: "DISPATCH_OK".to_string(), detail: "msg_1 routed to Alice Montgomery via Signal IPC (12 ms)".to_string(), timestamp: "10:43 AM".to_string() },
                     ActivityEvent { id: "evt_2".to_string(), kind: "MULTI_ROUTE".to_string(), detail: "msg_2 dual-path Signal primary, Matrix fallback armed".to_string(), timestamp: "10:43 AM".to_string() },
@@ -355,6 +357,30 @@ async fn init_engine(state: State<'_, AppState>) -> Result<String, String> {
         let _ = daemon.start().await;
     }
     daemon.register_session(DESKTOP_SESSION_ID, "desktop_ui", now_epoch()).await;
+    let server_clone = daemon.clone();
+    drop(daemon);
+    // Start the real TCP/WebSocket listener once so mobile/CLI clients can
+    // connect at ws://127.0.0.1:8765. The clone shares session/sender maps
+    // with the in-process daemon, so broadcasts reach socket clients too.
+    let should_start = {
+        let mut started = state.daemon_listener_started.lock().unwrap();
+        let should = !*started;
+        *started = true;
+        should
+    };
+    if should_start {
+        match tokio::net::TcpListener::bind("127.0.0.1:8765").await {
+            Ok(listener) => {
+                tokio::spawn(async move {
+                    let _ = omnicore_engine::server::WebSocketServer::run_tcp_listener(std::sync::Arc::new(server_clone), listener).await;
+                });
+                push_activity(&state, "DAEMON_LISTENER", "WebSocket listener started on ws://127.0.0.1:8765".to_string());
+            }
+            Err(e) => {
+                push_activity(&state, "DAEMON_LISTENER_ERROR", format!("Could not bind ws://127.0.0.1:8765 ({}); in-process session still active", e));
+            }
+        }
+    }
     Ok("Engine, SQLCipher cryptographic storage, protocol bridges, and daemon session active.".to_string())
 }
 

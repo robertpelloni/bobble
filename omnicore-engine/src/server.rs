@@ -5,10 +5,13 @@
 //! directly to the headless omnicore-engine daemon.
 
 use anyhow::{anyhow, Result};
+use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{mpsc, RwLock};
 
 /// Incoming request payload from client.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -64,6 +67,9 @@ pub struct WebSocketServer {
     pub port: u16,
     pub is_running: bool,
     sessions: Arc<RwLock<HashMap<String, ClientSession>>>,
+    // Live socket writers per session (network listener only). In-process
+    // sessions have no sender; broadcast_event still counts them logically.
+    senders: Arc<RwLock<HashMap<String, mpsc::UnboundedSender<String>>>>,
 }
 
 impl WebSocketServer {
@@ -73,6 +79,7 @@ impl WebSocketServer {
             port,
             is_running: false,
             sessions: Arc::new(RwLock::new(HashMap::new())),
+            senders: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -89,6 +96,8 @@ impl WebSocketServer {
         self.is_running = false;
         let mut sessions = self.sessions.write().await;
         sessions.clear();
+        drop(sessions);
+        self.senders.write().await.clear();
         Ok(())
     }
 
@@ -108,6 +117,14 @@ impl WebSocketServer {
     pub async fn unregister_session(&self, session_id: &str) {
         let mut sessions = self.sessions.write().await;
         sessions.remove(session_id);
+        drop(sessions);
+        self.senders.write().await.remove(session_id);
+    }
+
+    /// Attaches a live socket writer to a session so broadcast_event pushes
+    /// event frames over the network, not just counts them.
+    pub async fn attach_sender(&self, session_id: &str, tx: mpsc::UnboundedSender<String>) {
+        self.senders.write().await.insert(session_id.to_string(), tx);
     }
 
     /// Subscribes a registered session to a channel (or clears it with None).
@@ -144,12 +161,14 @@ impl WebSocketServer {
         let sessions = self.sessions.read().await;
         let mut delivered_count = 0;
 
-        let _notification = DaemonResponse::EventNotification {
+        let notification = DaemonResponse::EventNotification {
             event_type: event_type.to_string(),
             payload,
         };
+        let frame = serde_json::to_string(&notification).unwrap_or_default();
+        let senders = self.senders.read().await;
 
-        for (_session_id, session) in sessions.iter() {
+        for (session_id, session) in sessions.iter() {
             let should_deliver = match (target_channel, &session.subscribed_channel) {
                 (None, _) => true, // Global broadcast
                 (Some(target), Some(sub)) => target == sub,
@@ -158,10 +177,67 @@ impl WebSocketServer {
 
             if should_deliver {
                 delivered_count += 1;
+                // Live-push to network clients; in-process sessions have no
+                // sender and are counted logically (see struct docs).
+                if let Some(tx) = senders.get(session_id) {
+                    let _ = tx.send(frame.clone());
+                }
             }
         }
 
         delivered_count
+    }
+
+    /// Handles one WebSocket connection: registers a session, replies to
+    /// JSON-RPC requests, and forwards broadcast events until disconnect.
+    pub async fn handle_websocket_connection(server: Arc<WebSocketServer>, stream: TcpStream, peer: SocketAddr) -> Result<()> {
+        let ws = tokio_tungstenite::accept_async(stream).await.map_err(|e| anyhow!("WebSocket handshake failed: {}", e))?;
+        let (mut sink, mut stream) = ws.split();
+        let epoch = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+        let session_id = format!("ws-{}-{}", peer, epoch);
+        server.register_session(&session_id, "websocket", epoch).await;
+        let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+        server.attach_sender(&session_id, tx).await;
+
+        let writer = tokio::spawn(async move {
+            while let Some(frame) = rx.recv().await {
+                if sink.send(tokio_tungstenite::tungstenite::Message::Text(frame)).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        while let Some(msg) = stream.next().await {
+            match msg {
+                Ok(tokio_tungstenite::tungstenite::Message::Text(text)) => {
+                    let response = match server.handle_raw_request(&session_id, &text).await {
+                        Ok(r) => r,
+                        Err(e) => serde_json::to_string(&DaemonResponse::Error { code: 400, reason: e.to_string() }).unwrap_or_default(),
+                    };
+                    let senders = server.senders.read().await;
+                    if let Some(tx) = senders.get(&session_id) {
+                        let _ = tx.send(response);
+                    }
+                }
+                Ok(tokio_tungstenite::tungstenite::Message::Close(_)) | Err(_) => break,
+                _ => {}
+            }
+        }
+        server.unregister_session(&session_id).await;
+        writer.abort();
+        Ok(())
+    }
+
+    /// Accepts connections forever on an already-bound listener. Bind with
+    /// TcpListener::bind((server.bind_address, server.port)) or port 0 in tests.
+    pub async fn run_tcp_listener(server: Arc<WebSocketServer>, listener: TcpListener) -> Result<()> {
+        loop {
+            let (stream, peer) = listener.accept().await?;
+            let srv = Arc::clone(&server);
+            tokio::spawn(async move {
+                let _ = WebSocketServer::handle_websocket_connection(srv, stream, peer).await;
+            });
+        }
     }
 
     /// Processes an incoming JSON string request from a connected client.
@@ -286,6 +362,34 @@ mod tests {
         // Clearing the subscription stops channel-targeted delivery.
         assert!(server.subscribe_session("sess_1", None).await);
         assert_eq!(server.broadcast_event("ping", serde_json::json!({}), Some("general")).await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_websocket_listener_roundtrip_and_event_push() {
+        use futures_util::{SinkExt as _, StreamExt as _};
+        let server = Arc::new(WebSocketServer::new("127.0.0.1", 0));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let srv = Arc::clone(&server);
+        tokio::spawn(async move { let _ = WebSocketServer::run_tcp_listener(srv, listener).await; });
+
+        let (mut client, _) = tokio_tungstenite::connect_async(format!("ws://{}", addr)).await.unwrap();
+        // GetStatus RPC over the real socket.
+        let req = serde_json::to_string(&DaemonRequest::GetStatus).unwrap();
+        client.send(tokio_tungstenite::tungstenite::Message::Text(req)).await.unwrap();
+        let reply = client.next().await.unwrap().unwrap().into_text().unwrap();
+        assert!(reply.contains("OmniCore engine daemon active"), "reply: {}", reply);
+        assert_eq!(server.session_count().await, 1);
+
+        // Subscribe via RPC, then a broadcast must arrive as a pushed frame.
+        let sub = serde_json::to_string(&DaemonRequest::SubscribeEvents { channel_id: Some("ops".to_string()) }).unwrap();
+        client.send(tokio_tungstenite::tungstenite::Message::Text(sub)).await.unwrap();
+        let _sub_reply = client.next().await.unwrap().unwrap();
+        assert_eq!(server.broadcast_event("message_dispatched", serde_json::json!({"id": 1}), Some("ops")).await, 1);
+        let pushed = tokio::time::timeout(std::time::Duration::from_secs(5), client.next()).await.unwrap().unwrap().unwrap().into_text().unwrap();
+        assert!(pushed.contains("message_dispatched"), "pushed: {}", pushed);
+
+        client.close(None).await.unwrap();
     }
 
     #[tokio::test]

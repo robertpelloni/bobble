@@ -145,3 +145,7 @@ Coordinator identity for cross-agent handoff: **[muse-wonder-1.0 in Muse Code in
 ### Session 2026-11-13 (v1.2.0) — [muse-wonder-1.0 in Muse Code in C:\Users\hyper\workspace\bobble on laptop]
 - Daemon subscriptions wired (see CHANGELOG 1.2.0). Honest limits: no TCP listener yet (desktop session is in-process; mobile client connects only when a listener exists and otherwise reports offline). Next: add a tokio TCP/WebSocket listener to WebSocketServer, then live tray verification, then credentialled two-bridge proof (needs user credentials).
 
+
+### Session 2026-11-13 (v1.3.0) — [muse-wonder-1.0 in Muse Code in C:\Users\hyper\workspace\bobble on laptop]
+- Daemon has a real WebSocket listener (see CHANGELOG 1.3.0); desktop binds ws://127.0.0.1:8765 at init, mobile can now genuinely connect when the desktop/engine host is reachable. Remaining honest gaps: live tray click-through unverified; bridges are skeleton transports (no credentialled live delivery proof); native mesh HCI/JNI drivers absent. Next: tray verification pass, then credentialled two-bridge proof (needs user credentials/host choice).
+

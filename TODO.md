@@ -80,7 +80,7 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Fix Tailwind v4 PostCSS build break; fix Windows OpenSSL/SQLCipher build guidance; add missing icon.ico and mobile tsconfig.
 - [x] Unify scripts under scripts/omnicore.ps1 / omnicore.sh (originals archived).
 - [x] Wire selected routing profile into MultipathRouter execution (v1.1.1: send_message executes the chosen strategy and reports the delivering protocol/state).
-- [x] Subscribe desktop/mobile to WebSocketServer events (v1.2.0: desktop in-process session + RPC subscribe + send broadcasts; mobile WebSocket daemon client). Remaining: real TCP listener in the engine daemon.
+- [x] Subscribe desktop/mobile to WebSocketServer events (v1.2.0: desktop in-process session + RPC subscribe + send broadcasts; mobile WebSocket daemon client). Real TCP/WebSocket listener shipped in v1.3.0.
 - [ ] Native Bluetooth HCI adapter + Android Wi-Fi Direct JNI (carried over; mesh shows 0 peers until then).
 - [ ] Live-test native tray on Windows (left-click show, quit-servers-only) on a real desktop session.
 - [ ] Restore direct registry.npmjs.org installs (TLS alert seen 2026-11-13; mirror registry used as workaround — environment/network issue, see HANDOFF).

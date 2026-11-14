@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 1.3.0:
+  - Real daemon network listener: WebSocketServer now accepts TCP/WebSocket connections (tokio-tungstenite), registers a session per socket, answers DaemonRequest JSON-RPC over the wire, and live-pushes broadcast_event frames to subscribed socket clients (in-process sessions still counted logically). Desktop starts the listener once on ws://127.0.0.1:8765 at engine init (bind failure is logged as DAEMON_LISTENER_ERROR, in-process session continues). Mobile event parser now handles the engine's serde-tagged EventNotification frames. Proven by test_websocket_listener_roundtrip_and_event_push (real client socket: GetStatus reply, RPC subscribe, pushed message_dispatched frame).
 - 1.2.0:
   - Daemon subscription wiring: engine WebSocketServer gained a typed subscribe_session/subscribed_channel API (plus a stale hardcoded daemon version fixed to CARGO_PKG_VERSION). Desktop registers an in-process daemon session at startup, subscribes via the real SubscribeEvents JSON-RPC (get_daemon_status/subscribe_daemon_events commands, Subscribe control in the Engine panel), and broadcasts message_dispatched events on every send with the reached-session count logged as DAEMON_EVENT. Mobile gained a real daemon WebSocket client (src/services/daemon.ts) used by Conversation (connect, subscribe, SendMessage RPC, honest offline state) and Settings (shared endpoint). Note: the engine daemon is still session/RPC logic without a TCP listener, and the desktop session is in-process — a network listener is the remaining gap.
 - 1.1.1:

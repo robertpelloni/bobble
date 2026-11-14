@@ -10,8 +10,9 @@
 export type DaemonEventHandler = (eventType: string, payload: unknown) => void;
 
 interface DaemonEnvelope {
+  // Engine DaemonResponse is serde-tagged: { status: "Ok"|"Error"|"EventNotification", data: ... }
   status?: string;
-  data?: { message?: string; details?: unknown };
+  data?: { message?: string; details?: unknown; event_type?: string; payload?: unknown };
   event_type?: string;
   payload?: unknown;
 }
@@ -55,8 +56,10 @@ class DaemonClient {
         ws.onmessage = (msg) => {
           try {
             const env = JSON.parse(String(msg.data)) as DaemonEnvelope;
-            if (env.event_type) {
-              this.handlers.forEach((h) => h(env.event_type as string, env.payload));
+            const eventType = env.event_type ?? (env.status === 'EventNotification' ? env.data?.event_type : undefined);
+            const payload = env.payload ?? env.data?.payload;
+            if (eventType) {
+              this.handlers.forEach((h) => h(eventType, payload));
             }
           } catch {
             // Non-JSON frames are ignored; delivery state is unaffected.
