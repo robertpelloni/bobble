@@ -79,7 +79,7 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Complete system tray menu (pause/resume workers, probe, quit-servers-only, quit all).
 - [x] Fix Tailwind v4 PostCSS build break; fix Windows OpenSSL/SQLCipher build guidance; add missing icon.ico and mobile tsconfig.
 - [x] Unify scripts under scripts/omnicore.ps1 / omnicore.sh (originals archived).
-- [ ] Wire selected routing profile into Dispatcher execution (desktop shell currently records the choice).
+- [x] Wire selected routing profile into MultipathRouter execution (v1.1.1: send_message executes the chosen strategy and reports the delivering protocol/state).
 - [ ] Subscribe desktop/mobile to WebSocketServer event stream; remove invoke polling.
 - [ ] Native Bluetooth HCI adapter + Android Wi-Fi Direct JNI (carried over; mesh shows 0 peers until then).
 - [ ] Live-test native tray on Windows (left-click show, quit-servers-only) on a real desktop session.

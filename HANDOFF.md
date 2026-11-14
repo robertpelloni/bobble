@@ -137,3 +137,7 @@ Coordinator identity for cross-agent handoff: **[muse-wonder-1.0 in Muse Code in
 - Whether live bridge credentials (Matrix homeserver, signald, Discord token) should be provisioned for an end-to-end proof, and on which host.
 - Confirmation that npmmirror-as-fallback is acceptable, or a proxy/TLS fix for registry.npmjs.org.
 - Whether the 15-minute autopilot cron (job b8144614) should keep running after this session.
+
+### Session 2026-11-13 (v1.1.1 follow-up) — [muse-wonder-1.0 in Muse Code in C:\Users\hyper\workspace\bobble on laptop]
+- Routing profiles execute for real (see CHANGELOG 1.1.1). Canary echo is simulated from bridge-connected state; receipt generator is simulated locally — both documented in code until a live echo/ack channel exists.
+

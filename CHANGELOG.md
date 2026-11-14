@@ -1,7 +1,9 @@
-﻿# OmniCore Changelog
+# OmniCore Changelog
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 1.1.1:
+  - Routing profiles now execute: send_message runs the selected MultipathRouter strategy (optimal, hedged, adaptive retry, confirmed receipt, exact-once with a persistent dedup ledger, canary guard, percentile-bounded, bandwidth-throttled, cost/QoS, penalty-weighted) against the real engine bridges, reporting the delivering protocol and DeliveryState in the message status and Activity. Stateful helpers (dedup ledger, latency estimator, bandwidth shaper, canary detector, receipt tracker) persist in AppState behind async mutexes. Covered by test_execute_routing_profile_optimal_and_exact_once.
 - 1.1.0:
   - Consolidated single-page dashboard: merged the former Bridges and Routing Monitor tab pages into the main page (People | Conversation | Bridges/Routing/Activity right rail | Security, Groups/Mesh/Calls, Engine bottom band), ordered by value with the conversation centered. Every omnicore-engine module is now represented in the UI with descriptive labels and accessible "?" tooltips; each capability row names its engine symbol (e.g. `MultipathRouter::route_with_canary_drop_detection`).
   - Tauri backend: added `get_capabilities`, `get_routing_profiles`/`set_routing_profile`, `get_security_status`/`toggle_tor`/`export_identity_card`, `get_network_status`, `get_activity_log`, `get_channels`/`create_channel`, and `run_bridge_probe` commands backed by real engine types (IdentityCard, TorManager, TelemetryCollector, ApplianceConfig). Added the missing Nostr bridge to the desktop bridge list (8 networks, matching `ProtocolKind`).

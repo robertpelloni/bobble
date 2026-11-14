@@ -132,11 +132,11 @@ pub mod state {
         pub tor_enabled: Mutex<bool>,
         // Stateful routing helpers persisted across sends so profiles behave
         // like the engine intends (dedup window, p95 history, byte quotas).
-        pub dedup_ledger: Mutex<omnicore_engine::router::EgressDeduplicationLedger>,
-        pub latency_estimator: Mutex<omnicore_engine::router::RouteLatencyEstimator>,
-        pub bandwidth_shaper: Mutex<omnicore_engine::router::RouteBandwidthShaper>,
-        pub canary_detector: Mutex<omnicore_engine::router::CanaryDropDetector>,
-        pub receipt_tracker: Mutex<omnicore_engine::router::ReceiptTracker>,
+        pub dedup_ledger: tokio::sync::Mutex<omnicore_engine::router::EgressDeduplicationLedger>,
+        pub latency_estimator: tokio::sync::Mutex<omnicore_engine::router::RouteLatencyEstimator>,
+        pub bandwidth_shaper: tokio::sync::Mutex<omnicore_engine::router::RouteBandwidthShaper>,
+        pub canary_detector: tokio::sync::Mutex<omnicore_engine::router::CanaryDropDetector>,
+        pub receipt_tracker: tokio::sync::Mutex<omnicore_engine::router::ReceiptTracker>,
         pub activity: Mutex<Vec<ActivityEvent>>,
         pub channels: Mutex<Vec<ChannelInfo>>,
     }
@@ -296,11 +296,11 @@ pub mod state {
                 start_time: std::time::Instant::now(),
                 routing_profile: Mutex::new("optimal_cascade".to_string()),
                 tor_enabled: Mutex::new(false),
-                dedup_ledger: Mutex::new(omnicore_engine::router::EgressDeduplicationLedger::new(120)),
-                latency_estimator: Mutex::new(omnicore_engine::router::RouteLatencyEstimator::new(64)),
-                bandwidth_shaper: Mutex::new(omnicore_engine::router::RouteBandwidthShaper::new(60)),
-                canary_detector: Mutex::new(omnicore_engine::router::CanaryDropDetector::new(30)),
-                receipt_tracker: Mutex::new(omnicore_engine::router::ReceiptTracker::new(30)),
+                dedup_ledger: tokio::sync::Mutex::new(omnicore_engine::router::EgressDeduplicationLedger::new(120)),
+                latency_estimator: tokio::sync::Mutex::new(omnicore_engine::router::RouteLatencyEstimator::new(64)),
+                bandwidth_shaper: tokio::sync::Mutex::new(omnicore_engine::router::RouteBandwidthShaper::new(60)),
+                canary_detector: tokio::sync::Mutex::new(omnicore_engine::router::CanaryDropDetector::new(30)),
+                receipt_tracker: tokio::sync::Mutex::new(omnicore_engine::router::ReceiptTracker::new(30)),
                 activity: Mutex::new(vec![
                     ActivityEvent { id: "evt_1".to_string(), kind: "DISPATCH_OK".to_string(), detail: "msg_1 routed to Alice Montgomery via Signal IPC (12 ms)".to_string(), timestamp: "10:43 AM".to_string() },
                     ActivityEvent { id: "evt_2".to_string(), kind: "MULTI_ROUTE".to_string(), detail: "msg_2 dual-path Signal primary, Matrix fallback armed".to_string(), timestamp: "10:43 AM".to_string() },
@@ -395,7 +395,7 @@ fn get_messages(state: State<'_, AppState>) -> Vec<MessageItem> {
 
 /// Builds a BridgeRegistry with all 8 engine bridges and initializes the
 /// candidate bridges so their send_message guards pass.
-async fn build_router(state: &AppState, candidates: &[omnicore_engine::models::ProtocolKind]) -> omnicore_engine::router::MultipathRouter {
+async fn build_router(_state: &AppState, candidates: &[omnicore_engine::models::ProtocolKind]) -> omnicore_engine::router::MultipathRouter {
     use omnicore_engine::bridges::*;
     use omnicore_engine::models::ProtocolKind as P;
     let mut registry = omnicore_engine::router::BridgeRegistry::new();
@@ -451,11 +451,11 @@ async fn execute_routing_profile(
         "adaptive_retry" => router.route_with_adaptive_fallback_retry(&payload, primary, &fallbacks, 3, now).await,
         "confirmed_receipt" => {
             let nonce = format!("nonce-{}-{}", recipient, now);
-            let mut tracker = state.receipt_tracker.lock().unwrap();
+            let mut tracker = state.receipt_tracker.lock().await;
             router.route_with_confirmed_receipt(&payload, &nonce, primary, &fallbacks, &mut tracker, |proto, n, recip, ts| Some(DeliveryReceipt::generate(n, recip, proto, ts)), now).await.map(|(p, s, _receipt)| (p, s))
         }
         "exact_once" => {
-            let mut ledger = state.dedup_ledger.lock().unwrap();
+            let mut ledger = state.dedup_ledger.lock().await;
             router.route_with_exact_once_deduplication(&payload, primary, &fallbacks, &mut ledger, now).await
         }
         "canary_guard" => {
@@ -463,15 +463,15 @@ async fn execute_routing_profile(
             // state: disconnected bridges do not echo, so the detector
             // cascades away from them. (No live echo channel exists yet.)
             let connected: Vec<String> = state.bridges.lock().unwrap().iter().filter(|b| b.connected).map(|b| b.protocol.to_ascii_lowercase()).collect();
-            let mut detector = state.canary_detector.lock().unwrap();
+            let mut detector = state.canary_detector.lock().await;
             router.route_with_canary_drop_detection(&payload, primary, &fallbacks, &mut detector, |proto, _nonce| connected.iter().any(|c| c == &proto.as_str().to_ascii_lowercase()), now).await
         }
         "percentile_bounded" => {
-            let mut estimator = state.latency_estimator.lock().unwrap();
+            let mut estimator = state.latency_estimator.lock().await;
             router.route_with_percentile_bounded_cascade(&payload, primary, &fallbacks, &mut estimator, now).await
         }
         "bandwidth_throttled" => {
-            let mut shaper = state.bandwidth_shaper.lock().unwrap();
+            let mut shaper = state.bandwidth_shaper.lock().await;
             router.route_with_bandwidth_throttled_cascade(&payload, primary, &fallbacks, &mut shaper, now).await
         }
         "cost_qos" => router.route_with_cost_and_qos_optimization(&payload, primary, &fallbacks, QosRoutingPreference::CostSaving, now).await,
