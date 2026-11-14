@@ -138,6 +138,7 @@ export default function App() {
   const [showAddChannel, setShowAddChannel] = useState(false);
   const [newChannelName, setNewChannelName] = useState('');
   const [newChannelTopic, setNewChannelTopic] = useState('');
+  const [groupMemberId, setGroupMemberId] = useState('');
   const [groupPostText, setGroupPostText] = useState('');
   const [groupChannelId, setGroupChannelId] = useState('chan_ops');
   const [daemon, setDaemon] = useState<DaemonStatus>({ url: 'ws://127.0.0.1:18765', running: false, sessions: 0, subscribed_channel: null });
@@ -264,6 +265,17 @@ export default function App() {
       setChannels((p) => p.map((x) => (x.id === groupChannelId ? { ...x, event_count: x.event_count + 1 } : x)));
       logLocal('FEDERATED_POST', `Posted to channel ${groupChannelId}: ${groupPostText} (preview)`);
       setGroupPostText('');
+    }
+  };
+
+  const handleAddMember = () => {
+    const contact = contacts.find((c) => c.unified_id === (groupMemberId || contacts[0]?.unified_id));
+    if (!contact) return;
+    if (isTauri) {
+      invoke('add_channel_member', { channelId: groupChannelId, unifiedId: contact.unified_id, displayName: contact.name }).then((c) => { const ch = c as ChannelInfo; setChannels((p) => p.map((x) => (x.id === ch.id ? ch : x))); invoke('get_activity_log').then((a) => setActivity(a as ActivityEvent[])).catch(console.error); }).catch((err) => setNotice(`Add member failed: ${err}`));
+    } else {
+      setChannels((p) => p.map((x) => (x.id === groupChannelId ? { ...x, member_count: x.member_count + 1 } : x)));
+      logLocal('MEMBER_ADDED', `${contact.name} joined channel ${groupChannelId} (preview)`);
     }
   };
 
@@ -433,6 +445,10 @@ export default function App() {
             {showAddChannel && <form onSubmit={handleAddChannel} className="mb-2 bg-slate-800/70 border border-slate-700 rounded p-2.5 flex flex-col gap-2 text-xs"><input placeholder="Group name (e.g. family)" aria-label="Group name" value={newChannelName} onChange={(e) => setNewChannelName(e.target.value)} required className="bg-slate-900 border border-slate-700 rounded p-1.5" /><input placeholder="Topic (optional)" aria-label="Group topic" value={newChannelTopic} onChange={(e) => setNewChannelTopic(e.target.value)} className="bg-slate-900 border border-slate-700 rounded p-1.5" /><div className="flex gap-2"><button type="submit" className="flex-1 bg-sky-700 rounded py-1 font-semibold">Create group</button><button type="button" onClick={() => setShowAddChannel(false)} className="px-2 bg-slate-700 rounded">Cancel</button></div></form>}
             <div className="flex flex-col gap-2 text-xs">
               {channels.map((ch) => <div key={ch.id} className="bg-slate-950/60 border border-slate-800 rounded p-2.5"><div className="flex justify-between"><span className="font-semibold">#{ch.name}</span><span className="text-slate-500">{ch.bridge_protocol}</span></div><div className="text-slate-400 text-[11px]">{ch.topic}</div><div className="text-slate-500 text-[11px]">{ch.member_count} members · {ch.event_count} events <Tip text="Members and events replicate with vector-clock causal ordering; the delivery ledger tracks who has confirmed receipt and retries only missing members." /></div></div>)}
+              <div className="flex gap-1.5 text-[11px]">
+                <select value={groupMemberId || contacts[0]?.unified_id || ''} onChange={(e) => setGroupMemberId(e.target.value)} aria-label="Person to add" className="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded px-1.5 py-1" title="Person (unified contact) to add to the selected channel below. Adding is idempotent.">{contacts.map((c) => <option key={c.unified_id} value={c.unified_id}>{c.name}</option>)}</select>
+                <button type="button" onClick={handleAddMember} className="px-2 py-1 bg-slate-800 border border-slate-700 rounded font-semibold" title="Add the selected person as a member of the selected group channel so posts broadcast to them.">Add member</button>
+              </div>
               <form onSubmit={handlePostGroup} className="flex gap-1.5 text-[11px]">
                 <select value={groupChannelId} onChange={(e) => setGroupChannelId(e.target.value)} aria-label="Group channel" className="bg-slate-950 border border-slate-700 rounded px-1.5 py-1 max-w-[110px]" title="Channel to post into. The event is recorded in its vector-clock history and broadcast to other members via the router.">{channels.map((ch) => <option key={ch.id} value={ch.id}>#{ch.name}</option>)}</select>
                 <input value={groupPostText} onChange={(e) => setGroupPostText(e.target.value)} placeholder="Post to group…" aria-label="Group message" className="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded px-2 py-1" />

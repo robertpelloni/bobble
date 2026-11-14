@@ -1051,6 +1051,18 @@ async fn create_channel(state: State<'_, AppState>, name: String, topic: String,
     Ok(create_federated_channel(&state, &name, &topic, &bridge_protocol).await)
 }
 
+/// Adds a unified contact as a member of a federated channel (idempotent).
+#[tauri::command]
+async fn add_channel_member(state: State<'_, AppState>, channel_id: String, unified_id: String, display_name: String) -> Result<ChannelInfo, String> {
+    let mut mgr = state.federation.lock().await;
+    let channel = mgr.get_channel_mut(&channel_id).ok_or_else(|| format!("Channel '{}' not found", channel_id))?;
+    let added = channel.add_member(&unified_id, &display_name, "member");
+    let info = channel_to_info(channel);
+    drop(mgr);
+    push_activity(&state, if added { "MEMBER_ADDED" } else { "MEMBER_EXISTS" }, format!("{} {} #{}", display_name, if added { "joined" } else { "already in" }, info.name));
+    Ok(info)
+}
+
 /// Posts a message to a federated group channel as local_user. The event is
 /// recorded in the channel's causal history, then broadcast to other members
 /// via the shared MultipathRouter when one is attached (engine init).
@@ -1200,6 +1212,7 @@ fn main() {
             get_activity_log,
             get_channels,
             create_channel,
+            add_channel_member,
             post_channel_message,
             run_bridge_probe,
             get_daemon_status,

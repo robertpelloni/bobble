@@ -321,6 +321,23 @@ impl FederatedChannel {
         Ok(())
     }
 
+    /// Adds (or returns) a member and advances the causal clock. Re-adding an
+    /// existing member is a no-op so clients can call it idempotently.
+    pub fn add_member(&mut self, unified_id: &str, display_name: &str, role: &str) -> bool {
+        if self.members.contains_key(unified_id) {
+            return false;
+        }
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+        self.members.insert(unified_id.to_string(), ChannelMember {
+            unified_id: unified_id.to_string(),
+            display_name: display_name.to_string(),
+            role: role.to_string(),
+            joined_at: now,
+        });
+        self.clock.increment(unified_id);
+        true
+    }
+
     /// Author and post a new message from a local channel member.
     pub fn post_message(&mut self, author_id: &str, content: &str) -> Result<ChannelEvent> {
         if !self.members.contains_key(author_id) {
@@ -640,6 +657,20 @@ mod tests {
         assert_eq!(listed[0].channel_id, "chan_a");
         assert_eq!(listed[1].channel_id, "chan_b");
         assert_eq!(mgr.channel_count(), 2);
+    }
+
+    #[test]
+    fn test_add_member_idempotent_and_clock_advances() {
+        let mut mgr = FederationManager::new();
+        mgr.create_channel("chan_m", "Members", "topic", "alice");
+        let ch = mgr.get_channel_mut("chan_m").unwrap();
+        assert!(ch.add_member("bob_unified", "Bob", "member"));
+        assert_eq!(ch.members.len(), 2);
+        // Idempotent: second add does not duplicate or error.
+        assert!(!ch.add_member("bob_unified", "Bob", "member"));
+        assert_eq!(ch.members.len(), 2);
+        // The new member can post.
+        assert!(ch.post_message("bob_unified", "hi from bob").is_ok());
     }
 
     #[test]
