@@ -156,7 +156,9 @@ pub mod state {
         // durable store restored on launch.
         pub db: Mutex<Option<omnicore_engine::db::Database>>,
         pub activity: Mutex<Vec<ActivityEvent>>,
-        pub channels: Mutex<Vec<ChannelInfo>>,
+        // Group channels live in the real FederationManager (vector clocks,
+        // members, event history), not a UI-local list.
+        pub federation: Mutex<omnicore_engine::federation::FederationManager>,
     }
 
     impl Default for AppState {
@@ -327,9 +329,14 @@ pub mod state {
                     ActivityEvent { id: "evt_2".to_string(), kind: "MULTI_ROUTE".to_string(), detail: "msg_2 dual-path Signal primary, Matrix fallback armed".to_string(), timestamp: "10:43 AM".to_string() },
                     ActivityEvent { id: "evt_3".to_string(), kind: "SYNC_TOKEN".to_string(), detail: "Matrix homeserver sync token refreshed".to_string(), timestamp: "10:45 AM".to_string() },
                 ]),
-                channels: Mutex::new(vec![
-                    ChannelInfo { id: "chan_ops".to_string(), name: "ops-room".to_string(), topic: "Federated operations channel".to_string(), bridge_protocol: "Matrix".to_string(), member_count: 4, event_count: 12 },
-                ]),
+                federation: Mutex::new({
+                    let mut mgr = omnicore_engine::federation::FederationManager::new();
+                    mgr.create_channel("chan_ops", "ops-room", "Federated operations channel", "local_user");
+                    if let Some(ch) = mgr.get_channel_mut("chan_ops") {
+                        ch.active_bridge = Some(omnicore_engine::models::ProtocolKind::Matrix);
+                    }
+                    mgr
+                }),
             }
         }
     }
@@ -945,7 +952,7 @@ fn export_identity_card() -> Result<String, String> {
 async fn get_network_status(state: State<'_, AppState>) -> Result<NetworkStatus, String> {
     let telemetry = omnicore_engine::telemetry::TelemetryCollector::new().collect();
     let action = omnicore_engine::telemetry::ApplianceConfig::default().evaluate_action(&telemetry);
-    let channels = state.channels.lock().unwrap().len();
+    let channels = state.federation.lock().unwrap().channel_count();
     let daemon_sessions = state.daemon.read().await.session_count().await;
     Ok(NetworkStatus {
         federation_channels: channels,
@@ -966,19 +973,40 @@ fn get_activity_log(state: State<'_, AppState>) -> Vec<ActivityEvent> {
     state.activity.lock().unwrap().clone()
 }
 
+fn channel_to_info(ch: &omnicore_engine::federation::FederatedChannel) -> ChannelInfo {
+    ChannelInfo {
+        id: ch.channel_id.clone(),
+        name: ch.name.clone(),
+        topic: ch.topic.clone(),
+        bridge_protocol: ch.active_bridge.map(|p| p.as_str().to_string()).unwrap_or_else(|| "Matrix".to_string()),
+        member_count: ch.members.len(),
+        event_count: ch.event_history.len(),
+    }
+}
+
+fn create_federated_channel(state: &AppState, name: &str, topic: &str, bridge_protocol: &str) -> ChannelInfo {
+    let mut mgr = state.federation.lock().unwrap();
+    let id = format!("chan_{}_{}", mgr.channel_count() + 1, name.to_ascii_lowercase().replace(' ', "-"));
+    mgr.create_channel(&id, name, topic, "local_user");
+    if let Some(ch) = mgr.get_channel_mut(&id) {
+        ch.active_bridge = omnicore_engine::models::ProtocolKind::from_str_name(bridge_protocol);
+    }
+    let info = mgr.get_channel(&id).map(channel_to_info).unwrap_or_else(|| ChannelInfo {
+        id: id.clone(), name: name.to_string(), topic: topic.to_string(), bridge_protocol: bridge_protocol.to_string(), member_count: 1, event_count: 0,
+    });
+    drop(mgr);
+    push_activity(state, "CHANNEL_CREATED", format!("Federated channel '{}' ({}) created on {} via FederationManager", name, id, bridge_protocol));
+    info
+}
+
 #[tauri::command]
 fn get_channels(state: State<'_, AppState>) -> Vec<ChannelInfo> {
-    state.channels.lock().unwrap().clone()
+    state.federation.lock().unwrap().list_channels().iter().map(|c| channel_to_info(c)).collect()
 }
 
 #[tauri::command]
 fn create_channel(state: State<'_, AppState>, name: String, topic: String, bridge_protocol: String) -> ChannelInfo {
-    let mut channels = state.channels.lock().unwrap();
-    let ch = ChannelInfo { id: format!("chan_{}", channels.len() + 1), name: name.clone(), topic, bridge_protocol: bridge_protocol.clone(), member_count: 1, event_count: 0 };
-    channels.push(ch.clone());
-    drop(channels);
-    push_activity(&state, "CHANNEL_CREATED", format!("Federated channel '{}' created on {}", name, bridge_protocol));
-    ch
+    create_federated_channel(&state, &name, &topic, &bridge_protocol)
 }
 
 #[tauri::command]
@@ -1164,6 +1192,20 @@ mod tests {
         // Unknown protocols are rejected, never silently routed.
         let bad = crate::execute_routing_profile(&state, "optimal_cascade", "X", "hi", "CarrierPigeon", "Matrix").await;
         assert!(bad.is_err());
+    }
+
+    #[test]
+    fn test_federated_channel_creation_uses_manager() {
+        let state = AppState::default();
+        assert_eq!(state.federation.lock().unwrap().channel_count(), 1);
+        let created = crate::create_federated_channel(&state, "Family Chat", "Relatives", "Signal");
+        assert_eq!(created.name, "Family Chat");
+        assert_eq!(created.bridge_protocol, "Signal");
+        assert_eq!(created.member_count, 1);
+        let mgr = state.federation.lock().unwrap();
+        assert_eq!(mgr.channel_count(), 2);
+        assert!(mgr.get_channel(&created.id).is_some());
+        assert_eq!(mgr.list_channels().len(), 2);
     }
 
     #[test]

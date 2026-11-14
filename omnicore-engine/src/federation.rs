@@ -422,6 +422,17 @@ impl FederationManager {
         self.channels.get_mut(id)
     }
 
+    /// All channels sorted by id, for clients restoring group state on launch.
+    pub fn list_channels(&self) -> Vec<&FederatedChannel> {
+        let mut channels: Vec<&FederatedChannel> = self.channels.values().collect();
+        channels.sort_by(|a, b| a.channel_id.cmp(&b.channel_id));
+        channels
+    }
+
+    pub fn channel_count(&self) -> usize {
+        self.channels.len()
+    }
+
     pub fn sync_channel_events(&mut self, channel_id: &str, incoming_events: Vec<ChannelEvent>) -> Result<usize> {
         let channel = self.channels.get_mut(channel_id).ok_or_else(|| anyhow!("Channel not found"))?;
         let mut applied_count = 0;
@@ -616,6 +627,19 @@ mod tests {
         // Tamper with payload
         ev.payload = "Tampered message content".to_string();
         assert!(!ev.verify_signature(privkey));
+    }
+
+    #[test]
+    fn test_list_channels_sorted_and_counted() {
+        let mut mgr = FederationManager::new();
+        assert_eq!(mgr.channel_count(), 0);
+        mgr.create_channel("chan_b", "B Room", "second", "alice");
+        mgr.create_channel("chan_a", "A Room", "first", "alice");
+        let listed = mgr.list_channels();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].channel_id, "chan_a");
+        assert_eq!(listed[1].channel_id, "chan_b");
+        assert_eq!(mgr.channel_count(), 2);
     }
 
     #[test]

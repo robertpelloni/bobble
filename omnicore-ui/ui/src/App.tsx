@@ -82,7 +82,7 @@ const DEFAULT_ACTIVITY: ActivityEvent[] = [
   { id: 'evt_2', kind: 'MULTI_ROUTE', detail: 'msg_2 dual-path Signal primary, Matrix fallback armed', timestamp: '10:43 AM' },
   { id: 'evt_3', kind: 'SYNC_TOKEN', detail: 'Matrix homeserver sync token refreshed', timestamp: '10:45 AM' },
 ];
-const DEFAULT_CHANNELS: ChannelInfo[] = [{ id: 'chan_ops', name: 'ops-room', topic: 'Federated operations channel', bridge_protocol: 'Matrix', member_count: 4, event_count: 12 }];
+const DEFAULT_CHANNELS: ChannelInfo[] = [{ id: 'chan_ops', name: 'ops-room', topic: 'Federated operations channel', bridge_protocol: 'Matrix', member_count: 1, event_count: 0 }];
 
 /* Accessible tooltip: a "?" marker that reveals guidance on hover/focus.
    Uses a real <button> so keyboard users can reach the explanation. */

@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 1.6.0:
+  - Group channels are backed by the real FederationManager: the desktop no longer keeps a UI-local channel list. Channels carry vector clocks, members, event history, and active bridge from omnicore-engine/src/federation.rs (new FederationManager::list_channels/channel_count); creating a group registers it in the manager with its bridge set. Seeded ops-room now honestly reports 1 member / 0 events.
 - 1.5.2:
   - Restored DB message timestamps now render as 'YYYY-MM-DD HH:MM UTC' (format_epoch_utc, civil-from-days; was raw epoch seconds). CI gained a release-bundle job (Linux release binary artifact) that runs only on v* tags or manual dispatch.
 - 1.5.1:
