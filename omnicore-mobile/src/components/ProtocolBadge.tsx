@@ -19,6 +19,12 @@ export const ProtocolBadge: React.FC<ProtocolBadgeProps> = ({ protocol, isFallba
         return '#7c3aed';
       case 'sms':
         return '#d97706';
+      case 'tox':
+        return '#65a30d';
+      case 'imessage':
+        return '#0891b2';
+      case 'nostr':
+        return '#9333ea';
       default:
         return '#475569';
     }

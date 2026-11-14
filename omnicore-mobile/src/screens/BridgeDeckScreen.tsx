@@ -15,6 +15,8 @@ const BRIDGES: BridgeItem[] = [
   { protocol: 'SimpleX', endpoint: 'smp://simplex.broker.local:5223', status: 'Standby', latencyMs: 60 },
   { protocol: 'Tox', endpoint: 'nodes.tox.chat:33445', status: 'Standby', latencyMs: 95 },
   { protocol: 'SMS', endpoint: '/dev/ttyUSB0', status: 'Ready', latencyMs: 110 },
+  { protocol: 'iMessage', endpoint: 'https://relay.imessage.local', status: 'Configured', latencyMs: 50 },
+  { protocol: 'Nostr', endpoint: 'wss://relay.damus.io', status: 'Standby', latencyMs: 80 },
 ];
 
 export const BridgeDeckScreen: React.FC = () => {

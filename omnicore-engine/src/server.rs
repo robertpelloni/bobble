@@ -61,7 +61,7 @@ pub struct ClientSession {
 }
 
 /// Server manager maintaining daemon endpoint configuration and active sessions.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct WebSocketServer {
     pub bind_address: String,
     pub port: u16,
@@ -70,6 +70,21 @@ pub struct WebSocketServer {
     // Live socket writers per session (network listener only). In-process
     // sessions have no sender; broadcast_event still counts them logically.
     senders: Arc<RwLock<HashMap<String, mpsc::UnboundedSender<String>>>>,
+    // Optional message router: when attached, SendMessage RPCs execute a
+    // real MultipathRouter cascade instead of only queueing.
+    router: Option<Arc<crate::router::MultipathRouter>>,
+}
+
+impl std::fmt::Debug for WebSocketServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Router holds dyn bridges (not Debug); report its presence only.
+        f.debug_struct("WebSocketServer")
+            .field("bind_address", &self.bind_address)
+            .field("port", &self.port)
+            .field("is_running", &self.is_running)
+            .field("router_attached", &self.router.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl WebSocketServer {
@@ -80,7 +95,13 @@ impl WebSocketServer {
             is_running: false,
             sessions: Arc::new(RwLock::new(HashMap::new())),
             senders: Arc::new(RwLock::new(HashMap::new())),
+            router: None,
         }
+    }
+
+    /// Attaches a MultipathRouter so SendMessage RPCs dispatch for real.
+    pub fn set_router(&mut self, router: Arc<crate::router::MultipathRouter>) {
+        self.router = Some(router);
     }
 
     pub fn url(&self) -> String {
@@ -259,16 +280,52 @@ impl WebSocketServer {
                 content,
                 primary_protocol,
                 fallback_protocol,
-            } => DaemonResponse::Ok {
-                message: "Message queued for multi-path dispatch".to_string(),
-                details: Some(serde_json::json!({
-                    "recipient": recipient_id,
-                    "content_length": content.len(),
-                    "primary": primary_protocol,
-                    "fallback": fallback_protocol,
-                    "status": "Queued",
-                })),
-            },
+            } => {
+                // With a router attached, execute the cascade for real and
+                // report the delivering protocol; without one, queue only
+                // (the response says Queued — never fake a delivery).
+                if let Some(router) = &self.router {
+                    let primary = crate::models::ProtocolKind::from_str_name(&primary_protocol);
+                    let fallback = fallback_protocol.as_deref().and_then(crate::models::ProtocolKind::from_str_name);
+                    match (primary, fallback) {
+                        (Some(primary), fb) => {
+                            let fallbacks: Vec<crate::models::ProtocolKind> = fb.filter(|f| *f != primary).into_iter().collect();
+                            let payload = crate::dispatcher::MessagePayload {
+                                recipient_id: recipient_id.clone(),
+                                content: content.clone(),
+                                fallback_protocol: fallback_protocol.clone().unwrap_or_default(),
+                            };
+                            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                            match router.route_with_optimal_cascade(&payload, primary, &fallbacks, now).await {
+                                Ok((used, delivery)) => DaemonResponse::Ok {
+                                    message: format!("Message delivered via {}", used.as_str()),
+                                    details: Some(serde_json::json!({
+                                        "recipient": recipient_id,
+                                        "content_length": content.len(),
+                                        "primary": primary_protocol,
+                                        "fallback": fallback_protocol,
+                                        "delivered_via": used.as_str(),
+                                        "status": delivery.as_str(),
+                                    })),
+                                },
+                                Err(e) => DaemonResponse::Error { code: 502, reason: format!("Routing failed: {}", e) },
+                            }
+                        }
+                        _ => DaemonResponse::Error { code: 400, reason: format!("Unknown protocol '{}'", primary_protocol) },
+                    }
+                } else {
+                    DaemonResponse::Ok {
+                        message: "Message queued for multi-path dispatch".to_string(),
+                        details: Some(serde_json::json!({
+                            "recipient": recipient_id,
+                            "content_length": content.len(),
+                            "primary": primary_protocol,
+                            "fallback": fallback_protocol,
+                            "status": "Queued",
+                        })),
+                    }
+                }
+            }
             DaemonRequest::SubscribeEvents { channel_id } => {
                 let mut sessions = self.sessions.write().await;
                 if let Some(sess) = sessions.get_mut(session_id) {
@@ -389,6 +446,51 @@ mod tests {
         let pushed = tokio::time::timeout(std::time::Duration::from_secs(5), client.next()).await.unwrap().unwrap().unwrap().into_text().unwrap();
         assert!(pushed.contains("message_dispatched"), "pushed: {}", pushed);
 
+        client.close(None).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_websocket_send_message_routes_via_router() {
+        use crate::bridge::ProtocolBridge as _;
+        use futures_util::{SinkExt as _, StreamExt as _};
+        // Registry with initialized Signal + Matrix bridges, like the desktop.
+        let mut registry = crate::router::BridgeRegistry::new();
+        let mut signal = crate::bridges::signal::SignalBridge::new();
+        signal.initialize().await.unwrap();
+        registry.register(crate::models::ProtocolKind::Signal, Box::new(signal));
+        let mut matrix = crate::bridges::matrix::MatrixBridge::new();
+        matrix.initialize().await.unwrap();
+        registry.register(crate::models::ProtocolKind::Matrix, Box::new(matrix));
+        let router = Arc::new(crate::router::MultipathRouter::new(Arc::new(RwLock::new(registry))));
+
+        let mut server_inner = WebSocketServer::new("127.0.0.1", 0);
+        server_inner.set_router(router);
+        let server = Arc::new(server_inner);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let srv = Arc::clone(&server);
+        tokio::spawn(async move { let _ = WebSocketServer::run_tcp_listener(srv, listener).await; });
+
+        let (mut client, _) = tokio_tungstenite::connect_async(format!("ws://{}", addr)).await.unwrap();
+        let req = serde_json::to_string(&DaemonRequest::SendMessage {
+            recipient_id: "alice".to_string(),
+            content: "hello over the socket".to_string(),
+            primary_protocol: "Signal".to_string(),
+            fallback_protocol: Some("Matrix".to_string()),
+        }).unwrap();
+        client.send(tokio_tungstenite::tungstenite::Message::Text(req)).await.unwrap();
+        let reply = client.next().await.unwrap().unwrap().into_text().unwrap();
+        assert!(reply.contains("delivered"), "routed reply expected, got: {}", reply);
+        // Unknown protocol is an explicit error, never a fake delivery.
+        let bad = serde_json::to_string(&DaemonRequest::SendMessage {
+            recipient_id: "alice".to_string(),
+            content: "hi".to_string(),
+            primary_protocol: "CarrierPigeon".to_string(),
+            fallback_protocol: None,
+        }).unwrap();
+        client.send(tokio_tungstenite::tungstenite::Message::Text(bad)).await.unwrap();
+        let bad_reply = client.next().await.unwrap().unwrap().into_text().unwrap();
+        assert!(bad_reply.contains("Unknown protocol"), "got: {}", bad_reply);
         client.close(None).await.unwrap();
     }
 

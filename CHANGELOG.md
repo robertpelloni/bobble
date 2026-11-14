@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 1.4.0:
+  - Daemon SendMessage now routes: WebSocketServer accepts an optional MultipathRouter (set_router); socket SendMessage RPCs execute route_with_optimal_cascade and reply with delivered_via + DeliveryState (unknown protocol = explicit 400 Error, routing failure = 502 — never a fake delivery). Without a router the reply honestly stays Queued. Desktop attaches a router with all 8 bridges at engine init. Live-verified against the real desktop binary: an external WebSocket client sent SendMessage and received 'Message delivered via Signal' (status Delivered). Mobile BridgeDeck now lists all 8 networks (added iMessage, Nostr) with matching ProtocolBadge colors.
 - 1.3.1:
   - Daemon port moved 8765 -> 18765: port 8765 on the dev machine is already held by an unrelated pythonw process (left untouched), which made the desktop listener fail to bind and external probes hit the wrong server. All desktop/mobile defaults now use ws://127.0.0.1:18765 (engine tests keep constructing explicit ports). Live-verified: real desktop binary launched (window 'OmniCore Universal Aggregator', responding), daemon listened on 18765, and an external Node WebSocket client received GetStatus (version 1.3.0, running) and SubscribeEvents replies. Also synced the stale tauri.conf.json version (was 1.0.4).
 - 1.3.0:

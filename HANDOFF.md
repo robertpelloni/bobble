@@ -153,3 +153,7 @@ Coordinator identity for cross-agent handoff: **[muse-wonder-1.0 in Muse Code in
 ### Session 2026-11-14 (v1.3.1) — [muse-wonder-1.0 in Muse Code in C:\Users\hyper\workspace\bobble on laptop]
 - Live verification pass: desktop binary + Vite launched at BelowNormal priority; daemon probed by an external Node WebSocket client. Found port 8765 occupied by the user's pythonw (2026-11-13 20:55) — not killed; daemon moved to 18765 everywhere and re-verified live (GetStatus/Subscribe over a real socket). Tray: app process/window verified live; tray icon click-through still not automated — needs a human glance at the Windows tray while the app runs. Next: credentialled two-bridge delivery proof (needs user credentials/host).
 
+
+### Session 2026-11-14 (v1.4.0) — [muse-wonder-1.0 in Muse Code in C:\Users\hyper\workspace\bobble on laptop]
+- Daemon SendMessage routes through MultipathRouter (see CHANGELOG 1.4.0), live-proven over an external socket against the real desktop app. Remaining: bridges are skeleton transports (Signal reply above is the engine mock bridge, not a real Signal network delivery — a credentialled proof still needs user credentials/host); tray click-through unverified by automation; native mesh drivers absent. Next autonomous candidates: persist desktop contacts/messages to SQLCipher Database instead of in-memory state; add CI workflow.
+

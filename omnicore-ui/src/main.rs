@@ -352,10 +352,24 @@ async fn init_engine(state: State<'_, AppState>) -> Result<String, String> {
     let _bridge = omnicore_engine::bridges::matrix::MatrixBridge::new();
     // Start the in-process daemon and register this UI as a client session,
     // so sends can broadcast events to subscribed sessions (see send_message).
+    // Build the message router first (all 8 bridges, candidates initialized)
+    // so daemon SendMessage RPCs from socket clients route for real.
+    let all_protocols = [
+        omnicore_engine::models::ProtocolKind::Signal,
+        omnicore_engine::models::ProtocolKind::Matrix,
+        omnicore_engine::models::ProtocolKind::Discord,
+        omnicore_engine::models::ProtocolKind::Simplex,
+        omnicore_engine::models::ProtocolKind::Tox,
+        omnicore_engine::models::ProtocolKind::IMessage,
+        omnicore_engine::models::ProtocolKind::Sms,
+        omnicore_engine::models::ProtocolKind::Nostr,
+    ];
+    let router = build_router(&state, &all_protocols).await;
     let mut daemon = state.daemon.write().await;
     if !daemon.is_running {
         let _ = daemon.start().await;
     }
+    daemon.set_router(std::sync::Arc::new(router));
     daemon.register_session(DESKTOP_SESSION_ID, "desktop_ui", now_epoch()).await;
     let server_clone = daemon.clone();
     drop(daemon);
