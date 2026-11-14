@@ -130,6 +130,13 @@ pub mod state {
         pub start_time: std::time::Instant,
         pub routing_profile: Mutex<String>,
         pub tor_enabled: Mutex<bool>,
+        // Stateful routing helpers persisted across sends so profiles behave
+        // like the engine intends (dedup window, p95 history, byte quotas).
+        pub dedup_ledger: Mutex<omnicore_engine::router::EgressDeduplicationLedger>,
+        pub latency_estimator: Mutex<omnicore_engine::router::RouteLatencyEstimator>,
+        pub bandwidth_shaper: Mutex<omnicore_engine::router::RouteBandwidthShaper>,
+        pub canary_detector: Mutex<omnicore_engine::router::CanaryDropDetector>,
+        pub receipt_tracker: Mutex<omnicore_engine::router::ReceiptTracker>,
         pub activity: Mutex<Vec<ActivityEvent>>,
         pub channels: Mutex<Vec<ChannelInfo>>,
     }
@@ -289,6 +296,11 @@ pub mod state {
                 start_time: std::time::Instant::now(),
                 routing_profile: Mutex::new("optimal_cascade".to_string()),
                 tor_enabled: Mutex::new(false),
+                dedup_ledger: Mutex::new(omnicore_engine::router::EgressDeduplicationLedger::new(120)),
+                latency_estimator: Mutex::new(omnicore_engine::router::RouteLatencyEstimator::new(64)),
+                bandwidth_shaper: Mutex::new(omnicore_engine::router::RouteBandwidthShaper::new(60)),
+                canary_detector: Mutex::new(omnicore_engine::router::CanaryDropDetector::new(30)),
+                receipt_tracker: Mutex::new(omnicore_engine::router::ReceiptTracker::new(30)),
                 activity: Mutex::new(vec![
                     ActivityEvent { id: "evt_1".to_string(), kind: "DISPATCH_OK".to_string(), detail: "msg_1 routed to Alice Montgomery via Signal IPC (12 ms)".to_string(), timestamp: "10:43 AM".to_string() },
                     ActivityEvent { id: "evt_2".to_string(), kind: "MULTI_ROUTE".to_string(), detail: "msg_2 dual-path Signal primary, Matrix fallback armed".to_string(), timestamp: "10:43 AM".to_string() },
@@ -381,8 +393,96 @@ fn get_messages(state: State<'_, AppState>) -> Vec<MessageItem> {
     state.messages.lock().unwrap().clone()
 }
 
+/// Builds a BridgeRegistry with all 8 engine bridges and initializes the
+/// candidate bridges so their send_message guards pass.
+async fn build_router(state: &AppState, candidates: &[omnicore_engine::models::ProtocolKind]) -> omnicore_engine::router::MultipathRouter {
+    use omnicore_engine::bridges::*;
+    use omnicore_engine::models::ProtocolKind as P;
+    let mut registry = omnicore_engine::router::BridgeRegistry::new();
+    registry.register(P::Signal, Box::new(signal::SignalBridge::new()));
+    registry.register(P::Matrix, Box::new(matrix::MatrixBridge::new()));
+    registry.register(P::Discord, Box::new(discord::DiscordBridge::new()));
+    registry.register(P::Simplex, Box::new(simplex::SimplexBridge::new()));
+    registry.register(P::Tox, Box::new(tox::ToxBridge::new()));
+    registry.register(P::IMessage, Box::new(imessage::IMessageBridge::new()));
+    registry.register(P::Sms, Box::new(sms::SmsBridge::new()));
+    registry.register(P::Nostr, Box::new(nostr::NostrBridge::new()));
+    // Only initialize bridges this send may use; initialization is per-bridge
+    // setup (client build, modem ready, relay pool) and candidate bridges are
+    // the primary + distinct fallback.
+    for &kind in candidates {
+        if let Some(bridge_ref) = registry.get(kind) {
+            let mut bridge = bridge_ref.write().await;
+            let _ = bridge.initialize().await;
+        }
+    }
+    omnicore_engine::router::MultipathRouter::new(std::sync::Arc::new(tokio::sync::RwLock::new(registry)))
+}
+
+fn now_epoch() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()
+}
+
+/// Executes the dashboard's selected routing profile against the real
+/// MultipathRouter. Returns (delivered_protocol, delivery_state_label).
+/// Each profile id from get_routing_profiles maps to exactly one engine
+/// strategy; unknown ids fall back to the optimal cascade.
+async fn execute_routing_profile(
+    state: &AppState,
+    profile: &str,
+    recipient: &str,
+    content: &str,
+    primary_name: &str,
+    fallback_name: &str,
+) -> Result<(String, String), String> {
+    use omnicore_engine::dispatcher::MessagePayload;
+    use omnicore_engine::models::{DeliveryState, ProtocolKind};
+    use omnicore_engine::router::*;
+    let primary = ProtocolKind::from_str_name(primary_name).ok_or_else(|| format!("Unknown protocol '{}'", primary_name))?;
+    let fallback = ProtocolKind::from_str_name(fallback_name).ok_or_else(|| format!("Unknown protocol '{}'", fallback_name))?;
+    let fallbacks: Vec<ProtocolKind> = if fallback == primary { vec![] } else { vec![fallback] };
+    let mut candidates = vec![primary];
+    candidates.extend(fallbacks.iter().copied());
+    let router = build_router(state, &candidates).await;
+    let payload = MessagePayload { recipient_id: recipient.to_string(), content: content.to_string(), fallback_protocol: fallback_name.to_string() };
+    let now = now_epoch();
+    let outcome: Result<(ProtocolKind, DeliveryState), anyhow::Error> = match profile {
+        "hedged_racing" => router.route_hedged_racing(&payload, primary, &fallbacks, HedgedRoutingPolicy::default(), now).await,
+        "adaptive_retry" => router.route_with_adaptive_fallback_retry(&payload, primary, &fallbacks, 3, now).await,
+        "confirmed_receipt" => {
+            let nonce = format!("nonce-{}-{}", recipient, now);
+            let mut tracker = state.receipt_tracker.lock().unwrap();
+            router.route_with_confirmed_receipt(&payload, &nonce, primary, &fallbacks, &mut tracker, |proto, n, recip, ts| Some(DeliveryReceipt::generate(n, recip, proto, ts)), now).await.map(|(p, s, _receipt)| (p, s))
+        }
+        "exact_once" => {
+            let mut ledger = state.dedup_ledger.lock().unwrap();
+            router.route_with_exact_once_deduplication(&payload, primary, &fallbacks, &mut ledger, now).await
+        }
+        "canary_guard" => {
+            // Canary echo is simulated from the dashboard's bridge-connected
+            // state: disconnected bridges do not echo, so the detector
+            // cascades away from them. (No live echo channel exists yet.)
+            let connected: Vec<String> = state.bridges.lock().unwrap().iter().filter(|b| b.connected).map(|b| b.protocol.to_ascii_lowercase()).collect();
+            let mut detector = state.canary_detector.lock().unwrap();
+            router.route_with_canary_drop_detection(&payload, primary, &fallbacks, &mut detector, |proto, _nonce| connected.iter().any(|c| c == &proto.as_str().to_ascii_lowercase()), now).await
+        }
+        "percentile_bounded" => {
+            let mut estimator = state.latency_estimator.lock().unwrap();
+            router.route_with_percentile_bounded_cascade(&payload, primary, &fallbacks, &mut estimator, now).await
+        }
+        "bandwidth_throttled" => {
+            let mut shaper = state.bandwidth_shaper.lock().unwrap();
+            router.route_with_bandwidth_throttled_cascade(&payload, primary, &fallbacks, &mut shaper, now).await
+        }
+        "cost_qos" => router.route_with_cost_and_qos_optimization(&payload, primary, &fallbacks, QosRoutingPreference::CostSaving, now).await,
+        "penalty_weighted" => router.route_with_penalty_weighted_cascade(&payload, primary, &fallbacks, now).await,
+        _ => router.route_with_optimal_cascade(&payload, primary, &fallbacks, now).await,
+    };
+    outcome.map(|(used, delivery)| (used.as_str().to_string(), delivery.as_str().to_string())).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
-fn send_message(
+async fn send_message(
     state: State<'_, AppState>,
     recipient: String,
     content: String,
@@ -392,22 +492,31 @@ fn send_message(
     if content.trim().is_empty() {
         return Err("Message content cannot be empty".to_string());
     }
-
+    let profile = state.routing_profile.lock().unwrap().clone();
+    // Execute the selected profile for real; failures are surfaced in the
+    // message status and Activity instead of being silently swallowed.
+    let (used_protocol, status) = match execute_routing_profile(&state, &profile, &recipient, &content, &protocol, &fallback_protocol).await {
+        Ok((used, delivery)) => {
+            push_activity(&state, "DISPATCH_OK", format!("Message to {} delivered on {} via profile {} ({})", recipient, used, profile, delivery));
+            (used, delivery)
+        }
+        Err(e) => {
+            push_activity(&state, "ROUTE_FAILED", format!("Message to {} failed via profile {}: {}", recipient, profile, e));
+            (protocol.clone(), format!("failed: {}", e))
+        }
+    };
     let mut messages = state.messages.lock().unwrap();
     let new_item = MessageItem {
         id: format!("msg_{}", messages.len() + 1),
         sender: "You".to_string(),
         recipient: recipient.clone(),
         content: content.clone(),
-        protocol: format!("{} (fallback: {})", protocol, fallback_protocol),
+        protocol: format!("{} via {} (fallback: {})", used_protocol, profile, fallback_protocol),
         timestamp: "Just now".to_string(),
         is_outgoing: true,
-        status: "dispatched".to_string(),
+        status,
     };
-
     messages.push(new_item.clone());
-    drop(messages);
-    push_activity(&state, "DISPATCH_OK", format!("Message to {} via {} (fallback {})", recipient, protocol, fallback_protocol));
     Ok(new_item)
 }
 
@@ -770,6 +879,22 @@ mod tests {
             Ok(())
         };
         assert!(res_err.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_execute_routing_profile_optimal_and_exact_once() {
+        let state = AppState::default();
+        // Optimal cascade executes against real engine bridges and delivers.
+        let ok = crate::execute_routing_profile(&state, "optimal_cascade", "Alice Montgomery", "hello profile", "Signal", "Matrix").await;
+        assert!(ok.is_ok(), "optimal cascade should deliver: {:?}", ok.err());
+        // Exact-once: first send records the digest, identical resend is rejected.
+        let first = crate::execute_routing_profile(&state, "exact_once", "Bob Sterling", "dedup me", "Matrix", "Discord").await;
+        assert!(first.is_ok(), "first exact-once send should deliver: {:?}", first.err());
+        let dup = crate::execute_routing_profile(&state, "exact_once", "Bob Sterling", "dedup me", "Matrix", "Discord").await;
+        assert!(dup.is_err(), "duplicate exact-once send must be rejected");
+        // Unknown protocols are rejected, never silently routed.
+        let bad = crate::execute_routing_profile(&state, "optimal_cascade", "X", "hi", "CarrierPigeon", "Matrix").await;
+        assert!(bad.is_err());
     }
 
     #[test]
