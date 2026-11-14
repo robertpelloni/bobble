@@ -161,3 +161,8 @@ Coordinator identity for cross-agent handoff: **[muse-wonder-1.0 in Muse Code in
 ### Session 2026-11-14 (v1.5.0) — [muse-wonder-1.0 in Muse Code in C:\Users\hyper\workspace\bobble on laptop]
 - Desktop persistence shipped (see CHANGELOG 1.5.0). DB timestamps restore as epoch-second strings in message bubbles (cosmetic; format if desired). Next autonomous candidate: CI workflow. Credentialled live-network proof and tray click-through still need the user.
 
+
+### Session 2026-11-14 (audit) — [muse-wonder-1.0 in Muse Code in C:\Users\hyper\workspace\bobble on laptop]
+- Dependabot PR #5 (expo 51->58, react-native 0.74->0.88) NOT merged: its Mobile typecheck CI fails with an npm peer conflict (@types/react ~18 pinned vs ^19 required by react-native 0.88). It is a major migration (React 19, types, babel/metro config), not a patch bump — treat as its own task if wanted. The other dependabot branch (omnicore-ui/ui) has no diff vs main.
+- Mobile verified on current deps: npx expo export --platform android succeeds (537 modules, 1.51 MB Hermes bundle). dist/ was cleaned, not committed.
+
