@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 1.5.1:
+  - CI: added .github/workflows/ci.yml running engine tests, desktop (Tauri) tests, desktop frontend build, and mobile typecheck on push/PR to main. First run passed all four jobs (run 43570717448).
 - 1.5.0:
   - SQLCipher persistence for the desktop shell: init_engine opens omnicore.db in the app data dir (OMNICORE_DB_PATH / OMNICORE_DB_KEY overrides; default-key use is flagged in Activity as DB_KEY_WARNING), seeds default contacts on first run, and restores contacts + conversation history on later runs (new engine Database::list_contacts and get_or_create_direct_thread). add_contact and send_message persist to the DB; write failures surface as DB_PERSIST_ERROR in Activity instead of being silently dropped. Frontend startup now fetches contacts/messages only after init_engine resolves so restored state wins. Covered by test_db_persistence_roundtrip (seed -> persist -> reopen -> restored).
 - 1.4.0:
