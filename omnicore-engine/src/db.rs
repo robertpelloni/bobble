@@ -198,6 +198,49 @@ impl Database {
         }
     }
 
+    /// All contacts, ordered by id. Used by clients to restore state on launch.
+    pub fn list_contacts(&self) -> Result<Vec<UnifiedContact>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, unified_id, primary_protocol, fallback_protocols, created_at FROM contacts ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let primary_str: String = row.get(3)?;
+            let fallbacks_json: String = row.get(4)?;
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                primary_str,
+                fallbacks_json,
+                row.get::<_, i64>(5)?,
+            ))
+        })?;
+        let mut contacts = Vec::new();
+        for r in rows {
+            let (id, name, unified_id, primary_str, fallbacks_json, created_at) = r?;
+            let primary = ProtocolKind::from_str_name(&primary_str)
+                .ok_or_else(|| anyhow!("Invalid protocol: {}", primary_str))?;
+            let fallbacks: Vec<ProtocolKind> = serde_json::from_str(&fallbacks_json)?;
+            contacts.push(UnifiedContact { id, name, unified_id, primary_protocol: primary, fallback_protocols: fallbacks, created_at });
+        }
+        Ok(contacts)
+    }
+
+    /// Returns the first direct (non-group) thread for a contact, creating it
+    /// on first use so clients do not accumulate duplicate threads per send.
+    pub fn get_or_create_direct_thread(&self, contact_id: i64, title: &str) -> Result<i64> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM threads WHERE contact_id = ?1 AND is_group = 0 ORDER BY id ASC LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![contact_id])?;
+        if let Some(row) = rows.next()? {
+            return Ok(row.get(0)?);
+        }
+        drop(rows);
+        drop(stmt);
+        self.insert_thread(title, contact_id, false)
+    }
+
     pub fn insert_thread(&self, title: &str, contact_id: i64, is_group: bool) -> Result<i64> {
         self.conn.execute(
             "INSERT INTO threads (title, contact_id, is_group) VALUES (?1, ?2, ?3)",
@@ -481,6 +524,26 @@ mod tests {
         assert_eq!(history[0].content, "Hello world!");
         assert!(!history[0].is_outgoing);
 
+        let _ = fs::remove_file(db_path);
+    }
+
+    #[test]
+    fn test_list_contacts_and_direct_thread_reuse() {
+        let db_path = "test_list.db";
+        let _ = fs::remove_file(db_path);
+        let db = Database::init(db_path, "test_key").unwrap();
+        assert!(db.list_contacts().unwrap().is_empty());
+        let a = db.insert_contact("Alice", "alice_1", ProtocolKind::Signal, &[ProtocolKind::Matrix]).unwrap();
+        let b = db.insert_contact("Bob", "bob_1", ProtocolKind::Matrix, &[]).unwrap();
+        let listed = db.list_contacts().unwrap();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].id, a);
+        assert_eq!(listed[1].id, b);
+        assert_eq!(listed[0].fallback_protocols, vec![ProtocolKind::Matrix]);
+        // Direct thread is created once and reused.
+        let t1 = db.get_or_create_direct_thread(a, "Alice").unwrap();
+        let t2 = db.get_or_create_direct_thread(a, "Alice").unwrap();
+        assert_eq!(t1, t2);
         let _ = fs::remove_file(db_path);
     }
 

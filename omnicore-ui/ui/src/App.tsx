@@ -147,7 +147,16 @@ export default function App() {
 
   useEffect(() => {
     if (!isTauri) { setEngineStatus('Preview mode — engine data is illustrative; launch the desktop app for live state'); return; }
-    invoke('init_engine').then((r) => setEngineStatus(r as string)).catch((e) => setEngineStatus(`Engine error: ${e}`));
+    // init_engine opens the SQLCipher DB and restores persisted contacts/
+    // history first; only then fetch contacts/messages so restored state
+    // wins over the in-memory defaults.
+    invoke('init_engine').then((r) => {
+      setEngineStatus(r as string);
+      invoke('get_contacts').then((res) => { const l = res as ContactInfo[]; if (l.length) { setContacts(l); setSelectedContact(l[0]); } }).catch(console.error);
+      invoke('get_messages').then((res) => setMessages(res as MessageItem[])).catch(console.error);
+      invoke('get_activity_log').then((res) => setActivity(res as ActivityEvent[])).catch(console.error);
+      invoke('get_daemon_status').then((res) => setDaemon(res as DaemonStatus)).catch(console.error);
+    }).catch((e) => setEngineStatus(`Engine error: ${e}`));
     invoke('get_system_metrics').then((r) => setMetrics(r as SystemMetrics)).catch(console.error);
     invoke('get_contacts').then((r) => { const l = r as ContactInfo[]; if (l.length) { setContacts(l); setSelectedContact(l[0]); } }).catch(console.error);
     invoke('get_messages').then((r) => setMessages(r as MessageItem[])).catch(console.error);

@@ -157,3 +157,7 @@ Coordinator identity for cross-agent handoff: **[muse-wonder-1.0 in Muse Code in
 ### Session 2026-11-14 (v1.4.0) — [muse-wonder-1.0 in Muse Code in C:\Users\hyper\workspace\bobble on laptop]
 - Daemon SendMessage routes through MultipathRouter (see CHANGELOG 1.4.0), live-proven over an external socket against the real desktop app. Remaining: bridges are skeleton transports (Signal reply above is the engine mock bridge, not a real Signal network delivery — a credentialled proof still needs user credentials/host); tray click-through unverified by automation; native mesh drivers absent. Next autonomous candidates: persist desktop contacts/messages to SQLCipher Database instead of in-memory state; add CI workflow.
 
+
+### Session 2026-11-14 (v1.5.0) — [muse-wonder-1.0 in Muse Code in C:\Users\hyper\workspace\bobble on laptop]
+- Desktop persistence shipped (see CHANGELOG 1.5.0). DB timestamps restore as epoch-second strings in message bubbles (cosmetic; format if desired). Next autonomous candidate: CI workflow. Credentialled live-network proof and tray click-through still need the user.
+

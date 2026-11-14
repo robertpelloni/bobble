@@ -151,6 +151,10 @@ pub mod state {
         // still future work — mobile connects over WebSocket separately.)
         pub daemon: tokio::sync::RwLock<omnicore_engine::server::WebSocketServer>,
         pub daemon_listener_started: Mutex<bool>,
+        // SQLCipher persistence: None until init_engine opens the DB file.
+        // In-memory contacts/messages remain the UI cache; the DB is the
+        // durable store restored on launch.
+        pub db: Mutex<Option<omnicore_engine::db::Database>>,
         pub activity: Mutex<Vec<ActivityEvent>>,
         pub channels: Mutex<Vec<ChannelInfo>>,
     }
@@ -317,6 +321,7 @@ pub mod state {
                 receipt_tracker: tokio::sync::Mutex::new(omnicore_engine::router::ReceiptTracker::new(30)),
                 daemon: tokio::sync::RwLock::new(omnicore_engine::server::WebSocketServer::new("127.0.0.1", 18765)),
                 daemon_listener_started: Mutex::new(false),
+                db: Mutex::new(None),
                 activity: Mutex::new(vec![
                     ActivityEvent { id: "evt_1".to_string(), kind: "DISPATCH_OK".to_string(), detail: "msg_1 routed to Alice Montgomery via Signal IPC (12 ms)".to_string(), timestamp: "10:43 AM".to_string() },
                     ActivityEvent { id: "evt_2".to_string(), kind: "MULTI_ROUTE".to_string(), detail: "msg_2 dual-path Signal primary, Matrix fallback armed".to_string(), timestamp: "10:43 AM".to_string() },
@@ -347,9 +352,139 @@ fn greet(name: &str) -> String {
 
 pub const DESKTOP_SESSION_ID: &str = "desktop_main";
 
+fn contact_initials(name: &str) -> String {
+    let initials: String = name.split_whitespace().filter_map(|w| w.chars().next()).collect::<String>().to_uppercase();
+    if initials.is_empty() { "U".to_string() } else { initials }
+}
+
+fn db_contact_to_info(c: omnicore_engine::models::UnifiedContact) -> ContactInfo {
+    let mut mapped = vec![c.primary_protocol.as_str().to_string()];
+    for f in &c.fallback_protocols {
+        let s = f.as_str().to_string();
+        if !mapped.contains(&s) { mapped.push(s); }
+    }
+    ContactInfo {
+        id: c.id,
+        name: c.name.clone(),
+        unified_id: c.unified_id.clone(),
+        primary_protocol: c.primary_protocol.as_str().to_string(),
+        fallback_protocol: c.fallback_protocols.first().map(|p| p.as_str().to_string()).unwrap_or_else(|| c.primary_protocol.as_str().to_string()),
+        avatar_initials: contact_initials(&c.name),
+        status: "Online".to_string(),
+        mapped_protocols: mapped,
+    }
+}
+
+/// Opens (or creates) the SQLCipher DB at `path`. First run seeds the DB from
+/// the in-memory defaults; later runs restore contacts + history from disk.
+/// Returns a human summary for Activity/status. Errors are returned, never
+/// swallowed, so a broken DB is visible instead of silently in-memory-only.
+fn init_database_at(state: &AppState, path: &std::path::Path, key: &str) -> Result<String, String> {
+    let db = omnicore_engine::db::Database::init(path, key).map_err(|e| format!("DB open failed: {}", e))?;
+    let existing = db.list_contacts().map_err(|e| e.to_string())?;
+    let summary;
+    if existing.is_empty() {
+        // Seed: persist the default contacts and adopt their DB row ids.
+        let defaults = state.contacts.lock().unwrap().clone();
+        let mut seeded = Vec::new();
+        for c in defaults {
+            let primary = omnicore_engine::models::ProtocolKind::from_str_name(&c.primary_protocol).unwrap_or(omnicore_engine::models::ProtocolKind::Signal);
+            let fallbacks: Vec<omnicore_engine::models::ProtocolKind> = c.mapped_protocols.iter().filter_map(|p| omnicore_engine::models::ProtocolKind::from_str_name(p)).filter(|p| *p != primary).collect();
+            let row_id = db.insert_contact(&c.name, &c.unified_id, primary, &fallbacks).map_err(|e| e.to_string())?;
+            seeded.push(ContactInfo { id: row_id, ..c });
+        }
+        *state.contacts.lock().unwrap() = seeded;
+        summary = "SQLCipher DB created and seeded with default contacts".to_string();
+    } else {
+        // Restore contacts and their conversation history.
+        let infos: Vec<ContactInfo> = existing.iter().cloned().map(db_contact_to_info).collect();
+        let mut restored_messages = Vec::new();
+        for c in &existing {
+            if let Ok(history) = db.get_conversation_history(c.id, 500) {
+                for m in history {
+                    restored_messages.push(MessageItem {
+                        id: format!("db_{}", m.id),
+                        sender: m.sender,
+                        recipient: m.recipient,
+                        content: m.content,
+                        protocol: m.protocol.as_str().to_string(),
+                        timestamp: m.timestamp.to_string(),
+                        is_outgoing: m.is_outgoing,
+                        status: m.state.as_str().to_string(),
+                    });
+                }
+            }
+        }
+        let msg_count = restored_messages.len();
+        *state.contacts.lock().unwrap() = infos;
+        if !restored_messages.is_empty() {
+            *state.messages.lock().unwrap() = restored_messages;
+        }
+        summary = format!("SQLCipher DB restored {} contact(s), {} message(s)", existing.len(), msg_count);
+    }
+    *state.db.lock().unwrap() = Some(db);
+    Ok(summary)
+}
+
+/// Persists one outgoing message. DB failures are logged to Activity
+/// (DB_PERSIST_ERROR) — visible in the UI, never silently dropped.
+fn persist_outgoing(state: &AppState, recipient_name: &str, used_protocol: &str, content: &str, status_label: &str) {
+    // Lock order is contacts -> db everywhere (see add_contact); resolve the
+    // contact id first so the two locks are never held in opposite order.
+    let contact_id = state.contacts.lock().unwrap().iter().find(|c| c.name == recipient_name).map(|c| c.id);
+    let db_guard = state.db.lock().unwrap();
+    let Some(db) = db_guard.as_ref() else { return };
+    let Some(contact_id) = contact_id else {
+        push_activity(state, "DB_PERSIST_ERROR", format!("No contact '{}' to persist message against", recipient_name));
+        return;
+    };
+    let protocol = omnicore_engine::models::ProtocolKind::from_str_name(used_protocol).unwrap_or(omnicore_engine::models::ProtocolKind::Signal);
+    let result = (|| -> Result<i64, String> {
+        let thread_id = db.get_or_create_direct_thread(contact_id, recipient_name).map_err(|e| e.to_string())?;
+        let msg_id = db.record_message_with_thread(contact_id, thread_id, protocol, "You", recipient_name, content, true).map_err(|e| e.to_string())?;
+        let delivery = if status_label == "Delivered" {
+            omnicore_engine::models::DeliveryState::Delivered
+        } else if let Some(reason) = status_label.strip_prefix("failed: ") {
+            omnicore_engine::models::DeliveryState::Failed(reason.to_string())
+        } else {
+            omnicore_engine::models::DeliveryState::Sent
+        };
+        db.update_delivery_state(msg_id, &delivery).map_err(|e| e.to_string())?;
+        Ok(msg_id)
+    })();
+    match result {
+        Ok(id) => push_activity(state, "DB_PERSIST", format!("Message #{} persisted to SQLCipher for {}", id, recipient_name)),
+        Err(e) => push_activity(state, "DB_PERSIST_ERROR", format!("Failed to persist message for {}: {}", recipient_name, e)),
+    }
+}
+
 #[tauri::command]
-async fn init_engine(state: State<'_, AppState>) -> Result<String, String> {
+async fn init_engine(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
     let _bridge = omnicore_engine::bridges::matrix::MatrixBridge::new();
+    // Open the SQLCipher DB (app data dir, overridable for tests/dev) and
+    // restore or seed contacts/messages. Failure is surfaced, not hidden:
+    // the app keeps running in-memory and Activity shows DB_PERSIST_ERROR.
+    {
+        let db_path = std::env::var("OMNICORE_DB_PATH").map(std::path::PathBuf::from).unwrap_or_else(|_| {
+            let base = app.path().app_data_dir().unwrap_or_else(|_| std::env::temp_dir().join("omnicore"));
+            let _ = std::fs::create_dir_all(&base);
+            base.join("omnicore.db")
+        });
+        if let Some(parent) = db_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let using_default_key = std::env::var("OMNICORE_DB_KEY").is_err();
+        let db_key = std::env::var("OMNICORE_DB_KEY").unwrap_or_else(|_| "omnicore-local-dev-key".to_string());
+        match init_database_at(&state, &db_path, &db_key) {
+            Ok(summary) => {
+                push_activity(&state, "DB_READY", format!("{} at {}", summary, db_path.display()));
+                if using_default_key {
+                    push_activity(&state, "DB_KEY_WARNING", "Using default dev DB key; set OMNICORE_DB_KEY for a real passphrase".to_string());
+                }
+            }
+            Err(e) => push_activity(&state, "DB_PERSIST_ERROR", e),
+        }
+    }
     // Start the in-process daemon and register this UI as a client session,
     // so sends can broadcast events to subscribed sessions (see send_message).
     // Build the message router first (all 8 bridges, candidates initialized)
@@ -452,12 +587,25 @@ fn add_contact(
     mapped_protocols: Vec<String>,
 ) -> ContactInfo {
     let mut contacts = state.contacts.lock().unwrap();
-    let new_id = (contacts.len() + 1) as i64;
-    let initials = name
-        .split_whitespace()
-        .filter_map(|w| w.chars().next())
-        .collect::<String>()
-        .to_uppercase();
+    let provisional_id = (contacts.len() + 1) as i64;
+    // Persist first when the DB is open so the contact adopts its DB row id.
+    let new_id = {
+        let db_guard = state.db.lock().unwrap();
+        if let Some(db) = db_guard.as_ref() {
+            let primary = omnicore_engine::models::ProtocolKind::from_str_name(&primary_protocol).unwrap_or(omnicore_engine::models::ProtocolKind::Signal);
+            let fallbacks: Vec<omnicore_engine::models::ProtocolKind> = mapped_protocols.iter().filter_map(|p| omnicore_engine::models::ProtocolKind::from_str_name(p)).filter(|p| *p != primary).collect();
+            match db.insert_contact(&name, &format!("contact_unified_{}", provisional_id), primary, &fallbacks) {
+                Ok(row_id) => row_id,
+                Err(e) => {
+                    push_activity(&state, "DB_PERSIST_ERROR", format!("Failed to persist contact {}: {}", name, e));
+                    provisional_id
+                }
+            }
+        } else {
+            provisional_id
+        }
+    };
+    let initials = contact_initials(&name);
 
     let new_contact = ContactInfo {
         id: new_id,
@@ -591,6 +739,7 @@ async fn send_message(
             (protocol.clone(), format!("failed: {}", e))
         }
     };
+    persist_outgoing(&state, &recipient, &used_protocol, &content, &status);
     let new_item = {
         let mut messages = state.messages.lock().unwrap();
         let item = MessageItem {
@@ -995,6 +1144,30 @@ mod tests {
         // Unknown protocols are rejected, never silently routed.
         let bad = crate::execute_routing_profile(&state, "optimal_cascade", "X", "hi", "CarrierPigeon", "Matrix").await;
         assert!(bad.is_err());
+    }
+
+    #[test]
+    fn test_db_persistence_roundtrip() {
+        let path = std::env::temp_dir().join(format!("omnicore_test_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        // First run: seeds defaults, persists one outgoing message.
+        let state = AppState::default();
+        let summary = crate::init_database_at(&state, &path, "test_key").unwrap();
+        assert!(summary.contains("seeded"), "summary: {}", summary);
+        assert_eq!(state.contacts.lock().unwrap().len(), 4);
+        crate::persist_outgoing(&state, "Alice Montgomery", "Signal", "persist me across restarts", "Delivered");
+        *state.db.lock().unwrap() = None;
+        // Second run: contacts and the message are restored from SQLCipher.
+        let state2 = AppState::default();
+        let summary2 = crate::init_database_at(&state2, &path, "test_key").unwrap();
+        assert!(summary2.contains("restored"), "summary: {}", summary2);
+        let contacts2 = state2.contacts.lock().unwrap();
+        assert_eq!(contacts2.len(), 4);
+        assert!(contacts2.iter().any(|c| c.name == "Alice Montgomery"));
+        drop(contacts2);
+        let messages2 = state2.messages.lock().unwrap();
+        assert!(messages2.iter().any(|m| m.content == "persist me across restarts" && m.recipient == "Alice Montgomery"), "messages: {:?}", messages2.iter().map(|m| &m.content).collect::<Vec<_>>());
+        let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
