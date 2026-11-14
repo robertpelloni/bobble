@@ -1,5 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+// Single source of truth for the preview version badge: ui/package.json,
+// which the release bump scripts keep in sync with VERSION.md.
+import uiPackage from '../package.json';
 
 /* OmniCore consolidated dashboard — ONE page, no tabs/subpages.
    Layout (highest value first, left to right, top to bottom):
@@ -29,7 +32,7 @@ interface MeshInfo { connected_peers: number; queued_forwards: number; seen_pack
 
 const PROTOCOLS = ['Signal', 'Matrix', 'Discord', 'Simplex', 'Tox', 'iMessage', 'SMS', 'Nostr'];
 
-const DEFAULT_METRICS: SystemMetrics = { version: '1.1.0', active_bridges: 4, queued_messages: 0, encryption: 'SQLCipher (AES-256-GCM)', uptime_secs: 120, server_running: true };
+const DEFAULT_METRICS: SystemMetrics = { version: uiPackage.version, active_bridges: 4, queued_messages: 0, encryption: 'SQLCipher (AES-256-GCM)', uptime_secs: 120, server_running: true };
 
 const DEFAULT_CONTACTS: ContactInfo[] = [
   { id: 1, name: 'Alice Montgomery', unified_id: 'alice_unified_1', primary_protocol: 'Signal', fallback_protocol: 'Matrix', avatar_initials: 'AM', status: 'Online', mapped_protocols: ['Signal', 'Matrix', 'SMS'] },
@@ -160,7 +163,17 @@ export default function App() {
   const logLocal = (kind: string, detail: string) => setActivity((p) => [{ id: `evt_${Date.now()}`, kind, detail, timestamp: 'Just now' }, ...p].slice(0, 50));
 
   useEffect(() => {
-    if (!isTauri) { setEngineStatus('Preview mode — engine data is illustrative; launch the desktop app for live state'); return; }
+    if (!isTauri) {
+      setEngineStatus('Preview mode — engine data is illustrative; launch the desktop app for live state');
+      // Preview sample trust so People badges render as they do live.
+      setReputations([
+        { name: 'Alice Montgomery', score: 42, tier: 'Vetted', successful_deliveries: 21, spam_violations: 0 },
+        { name: 'Bob Sterling', score: 8, tier: 'Neutral', successful_deliveries: 4, spam_violations: 0 },
+        { name: 'Charlie Vance', score: 0, tier: 'Neutral', successful_deliveries: 0, spam_violations: 0 },
+        { name: 'Dana Scully', score: 81, tier: 'Trusted', successful_deliveries: 40, spam_violations: 0 },
+      ]);
+      return;
+    }
     // init_engine opens the SQLCipher DB and restores persisted contacts/
     // history first; only then fetch contacts/messages so restored state
     // wins over the in-memory defaults.
