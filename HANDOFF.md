@@ -170,3 +170,7 @@ Coordinator identity for cross-agent handoff: **[muse-wonder-1.0 in Muse Code in
 ### Session 2026-11-14 (v1.6.1) — [muse-wonder-1.0 in Muse Code in C:\Users\hyper\workspace\bobble on laptop]
 - Settings persistence shipped (see CHANGELOG 1.6.1). Environment note: a workspace test run hit ENOSPC from target/debug/incremental (5.1 GB); cleared it (regenerable). C: had ~13 GB free against a 23.5 GB target dir — consider cargo clean or moving CARGO_TARGET_DIR to a roomier drive (D:/J: have 100+ GB free).
 
+
+### Session 2026-11-14 (v1.16.0 cumulative) — [muse-wonder-1.0 in Muse Code in C:\Users\hyper\workspace\bobble on laptop]
+Shipped since v1.1.0: routing profiles execute (1.1.1), daemon subscriptions (1.2.0), real WebSocket listener (1.3.0, port moved to 18765 in 1.3.1 after finding 8765 held by the user's pythonw), routed daemon SendMessage (1.4.0), SQLCipher persistence for contacts/messages (1.5.0), CI (1.5.1-1.5.2), FederationManager-backed groups (1.6.0), settings persistence (1.6.1), group posting (1.7.0), members + lockfile-desync fix (1.7.1), bridge handover (1.8.0), federation persistence (1.9.0), offline outbox (1.10.0), backup + QR (1.11.0), ChaCha20-Poly1305 backup AEAD (1.12.0), persistent routing metrics + Diagnose (1.13.0), real Probe (1.13.1), calls (1.14.0), reputation trust tiers (1.15.0), interactive mesh daemon (1.16.0). MANUAL.md rewritten at v1.16.0. Still open: live-network credentialled proof (needs user), tray click-through human check, Expo 58 migration (PR #5, unmerged by design), native mesh HCI/JNI drivers.
+

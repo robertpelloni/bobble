@@ -84,3 +84,8 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [ ] Native Bluetooth HCI adapter + Android Wi-Fi Direct JNI (carried over; mesh shows 0 peers until then).
 - [ ] Live-test native tray on Windows (left-click show, quit-servers-only) on a real desktop session.
 - [ ] Restore direct registry.npmjs.org installs (TLS alert seen 2026-11-13; mirror registry used as workaround — environment/network issue, see HANDOFF).
+
+- [ ] Live-network credentialled delivery proof (needs user: Matrix homeserver / signald / Discord token + host choice).
+- [ ] Human tray click-through check on Windows (left-click show, Pause workers, Quit servers only) while the app runs.
+- [ ] Expo 58 / React Native 0.88 migration (dependabot PR #5) as a dedicated migration task.
+
