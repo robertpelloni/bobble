@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   SafeAreaView,
 } from 'react-native';
 import { ProtocolBadge } from '../components/ProtocolBadge';
+import { daemon } from '../services/daemon';
 
 interface Message {
   id: string;
@@ -40,14 +41,31 @@ export const ConversationScreen: React.FC = () => {
   ]);
   const [input, setInput] = useState('');
   const [primaryProto, setPrimaryProto] = useState('Signal');
+  const [daemonOnline, setDaemonOnline] = useState(false);
+
+  // Connect to the engine daemon and subscribe to global events. Offline is
+  // a normal state (engine not reachable from the phone yet): messages stay
+  // local and the header says so instead of faking delivery.
+  useEffect(() => {
+    let mounted = true;
+    daemon.connect().then((ok) => {
+      if (!mounted) return;
+      setDaemonOnline(ok);
+      if (ok) daemon.subscribe(null);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const handleSend = () => {
     if (!input.trim()) return;
+    const viaDaemon = daemonOnline && daemon.sendMessage('alice_unified_1', input, primaryProto, 'Matrix');
     const newMsg: Message = {
       id: `m_${Date.now()}`,
       sender: 'You',
       content: input,
-      protocol: primaryProto,
+      protocol: viaDaemon ? `${primaryProto} (via daemon)` : primaryProto,
       timestamp: 'Just now',
       isOutgoing: true,
     };
@@ -60,6 +78,7 @@ export const ConversationScreen: React.FC = () => {
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Alice Montgomery</Text>
         <Text style={styles.headerSubtitle}>Unified ID: alice_unified_1</Text>
+        <Text style={styles.headerSubtitle}>{daemonOnline ? 'Engine daemon: connected (subscribed to events)' : 'Engine daemon: offline — messages stay on this device'}</Text>
         <View style={styles.badgeRow}>
           <ProtocolBadge protocol={primaryProto} />
           <ProtocolBadge protocol="Matrix" isFallback />

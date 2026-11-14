@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 1.2.0:
+  - Daemon subscription wiring: engine WebSocketServer gained a typed subscribe_session/subscribed_channel API (plus a stale hardcoded daemon version fixed to CARGO_PKG_VERSION). Desktop registers an in-process daemon session at startup, subscribes via the real SubscribeEvents JSON-RPC (get_daemon_status/subscribe_daemon_events commands, Subscribe control in the Engine panel), and broadcasts message_dispatched events on every send with the reached-session count logged as DAEMON_EVENT. Mobile gained a real daemon WebSocket client (src/services/daemon.ts) used by Conversation (connect, subscribe, SendMessage RPC, honest offline state) and Settings (shared endpoint). Note: the engine daemon is still session/RPC logic without a TCP listener, and the desktop session is in-process — a network listener is the remaining gap.
 - 1.1.1:
   - Routing profiles now execute: send_message runs the selected MultipathRouter strategy (optimal, hedged, adaptive retry, confirmed receipt, exact-once with a persistent dedup ledger, canary guard, percentile-bounded, bandwidth-throttled, cost/QoS, penalty-weighted) against the real engine bridges, reporting the delivering protocol and DeliveryState in the message status and Activity. Stateful helpers (dedup ledger, latency estimator, bandwidth shaper, canary detector, receipt tracker) persist in AppState behind async mutexes. Covered by test_execute_routing_profile_optimal_and_exact_once.
 - 1.1.0:

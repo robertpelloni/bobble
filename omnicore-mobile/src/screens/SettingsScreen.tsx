@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { daemon } from '../services/daemon';
 import {
   View,
   Text,
@@ -11,7 +12,11 @@ import {
 } from 'react-native';
 
 export const SettingsScreen: React.FC = () => {
-  const [daemonEndpoint, setDaemonEndpoint] = useState('ws://127.0.0.1:8765');
+  const [daemonEndpoint, setDaemonEndpointState] = useState(daemon.getEndpoint());
+  const setDaemonEndpoint = (url: string) => {
+    setDaemonEndpointState(url);
+    daemon.setEndpoint(url);
+  };
   const [torEnabled, setTorEnabled] = useState(true);
   const [onionAddress, setOnionAddress] = useState(
     'omnicore3x7abc1234567890abcdefghijklmnopqrstuvwxyz234567.onion'

@@ -141,3 +141,7 @@ Coordinator identity for cross-agent handoff: **[muse-wonder-1.0 in Muse Code in
 ### Session 2026-11-13 (v1.1.1 follow-up) — [muse-wonder-1.0 in Muse Code in C:\Users\hyper\workspace\bobble on laptop]
 - Routing profiles execute for real (see CHANGELOG 1.1.1). Canary echo is simulated from bridge-connected state; receipt generator is simulated locally — both documented in code until a live echo/ack channel exists.
 
+
+### Session 2026-11-13 (v1.2.0) — [muse-wonder-1.0 in Muse Code in C:\Users\hyper\workspace\bobble on laptop]
+- Daemon subscriptions wired (see CHANGELOG 1.2.0). Honest limits: no TCP listener yet (desktop session is in-process; mobile client connects only when a listener exists and otherwise reports offline). Next: add a tokio TCP/WebSocket listener to WebSocketServer, then live tray verification, then credentialled two-bridge proof (needs user credentials).
+

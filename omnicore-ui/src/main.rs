@@ -113,6 +113,14 @@ pub mod state {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct DaemonStatus {
+        pub url: String,
+        pub running: bool,
+        pub sessions: usize,
+        pub subscribed_channel: Option<String>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct ChannelInfo {
         pub id: String,
         pub name: String,
@@ -137,6 +145,11 @@ pub mod state {
         pub bandwidth_shaper: tokio::sync::Mutex<omnicore_engine::router::RouteBandwidthShaper>,
         pub canary_detector: tokio::sync::Mutex<omnicore_engine::router::CanaryDropDetector>,
         pub receipt_tracker: tokio::sync::Mutex<omnicore_engine::router::ReceiptTracker>,
+        // In-process daemon session: the desktop UI registers as a
+        // WebSocketServer client and receives broadcast events for its sends.
+        // (The engine daemon is session/RPC logic; a real TCP listener is
+        // still future work — mobile connects over WebSocket separately.)
+        pub daemon: tokio::sync::RwLock<omnicore_engine::server::WebSocketServer>,
         pub activity: Mutex<Vec<ActivityEvent>>,
         pub channels: Mutex<Vec<ChannelInfo>>,
     }
@@ -301,6 +314,7 @@ pub mod state {
                 bandwidth_shaper: tokio::sync::Mutex::new(omnicore_engine::router::RouteBandwidthShaper::new(60)),
                 canary_detector: tokio::sync::Mutex::new(omnicore_engine::router::CanaryDropDetector::new(30)),
                 receipt_tracker: tokio::sync::Mutex::new(omnicore_engine::router::ReceiptTracker::new(30)),
+                daemon: tokio::sync::RwLock::new(omnicore_engine::server::WebSocketServer::new("127.0.0.1", 8765)),
                 activity: Mutex::new(vec![
                     ActivityEvent { id: "evt_1".to_string(), kind: "DISPATCH_OK".to_string(), detail: "msg_1 routed to Alice Montgomery via Signal IPC (12 ms)".to_string(), timestamp: "10:43 AM".to_string() },
                     ActivityEvent { id: "evt_2".to_string(), kind: "MULTI_ROUTE".to_string(), detail: "msg_2 dual-path Signal primary, Matrix fallback armed".to_string(), timestamp: "10:43 AM".to_string() },
@@ -329,10 +343,42 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! OmniCore engine online.", name)
 }
 
+pub const DESKTOP_SESSION_ID: &str = "desktop_main";
+
 #[tauri::command]
-fn init_engine() -> String {
+async fn init_engine(state: State<'_, AppState>) -> Result<String, String> {
     let _bridge = omnicore_engine::bridges::matrix::MatrixBridge::new();
-    "Engine, SQLCipher cryptographic storage, and protocol bridges active.".to_string()
+    // Start the in-process daemon and register this UI as a client session,
+    // so sends can broadcast events to subscribed sessions (see send_message).
+    let mut daemon = state.daemon.write().await;
+    if !daemon.is_running {
+        let _ = daemon.start().await;
+    }
+    daemon.register_session(DESKTOP_SESSION_ID, "desktop_ui", now_epoch()).await;
+    Ok("Engine, SQLCipher cryptographic storage, protocol bridges, and daemon session active.".to_string())
+}
+
+#[tauri::command]
+async fn get_daemon_status(state: State<'_, AppState>) -> Result<DaemonStatus, String> {
+    let daemon = state.daemon.read().await;
+    Ok(DaemonStatus {
+        url: daemon.url(),
+        running: daemon.is_running,
+        sessions: daemon.session_count().await,
+        subscribed_channel: daemon.subscribed_channel(DESKTOP_SESSION_ID).await.flatten(),
+    })
+}
+
+/// Subscribes the desktop session to a channel via the daemon's real
+/// JSON-RPC path (DaemonRequest::SubscribeEvents), not a local shortcut.
+#[tauri::command]
+async fn subscribe_daemon_events(state: State<'_, AppState>, channel_id: Option<String>) -> Result<String, String> {
+    let req = serde_json::to_string(&omnicore_engine::server::DaemonRequest::SubscribeEvents { channel_id: channel_id.clone() })
+        .map_err(|e| e.to_string())?;
+    let daemon = state.daemon.read().await;
+    let res = daemon.handle_raw_request(DESKTOP_SESSION_ID, &req).await.map_err(|e| e.to_string())?;
+    push_activity(&state, "DAEMON_SUBSCRIBE", format!("Desktop session subscribed to channel {:?}", channel_id));
+    Ok(res)
 }
 
 #[tauri::command]
@@ -505,18 +551,29 @@ async fn send_message(
             (protocol.clone(), format!("failed: {}", e))
         }
     };
-    let mut messages = state.messages.lock().unwrap();
-    let new_item = MessageItem {
-        id: format!("msg_{}", messages.len() + 1),
-        sender: "You".to_string(),
-        recipient: recipient.clone(),
-        content: content.clone(),
-        protocol: format!("{} via {} (fallback: {})", used_protocol, profile, fallback_protocol),
-        timestamp: "Just now".to_string(),
-        is_outgoing: true,
-        status,
+    let new_item = {
+        let mut messages = state.messages.lock().unwrap();
+        let item = MessageItem {
+            id: format!("msg_{}", messages.len() + 1),
+            sender: "You".to_string(),
+            recipient: recipient.clone(),
+            content: content.clone(),
+            protocol: format!("{} via {} (fallback: {})", used_protocol, profile, fallback_protocol),
+            timestamp: "Just now".to_string(),
+            is_outgoing: true,
+            status,
+        };
+        messages.push(item.clone());
+        item
     };
-    messages.push(new_item.clone());
+    // Broadcast a daemon event to subscribed sessions (channel-targeted when
+    // this UI session subscribed to a channel, global otherwise).
+    {
+        let daemon = state.daemon.read().await;
+        let channel = daemon.subscribed_channel(DESKTOP_SESSION_ID).await.flatten();
+        let delivered = daemon.broadcast_event("message_dispatched", serde_json::json!({"recipient": recipient, "protocol": used_protocol, "profile": profile}), channel.as_deref()).await;
+        push_activity(&state, "DAEMON_EVENT", format!("message_dispatched broadcast reached {} subscribed session(s)", delivered));
+    }
     Ok(new_item)
 }
 
@@ -676,11 +733,12 @@ fn export_identity_card() -> Result<String, String> {
 }
 
 #[tauri::command]
-fn get_network_status(state: State<'_, AppState>) -> NetworkStatus {
+async fn get_network_status(state: State<'_, AppState>) -> Result<NetworkStatus, String> {
     let telemetry = omnicore_engine::telemetry::TelemetryCollector::new().collect();
     let action = omnicore_engine::telemetry::ApplianceConfig::default().evaluate_action(&telemetry);
     let channels = state.channels.lock().unwrap().len();
-    NetworkStatus {
+    let daemon_sessions = state.daemon.read().await.session_count().await;
+    Ok(NetworkStatus {
         federation_channels: channels,
         federation_description: "Federated group channels with vector-clock causal sync + delivery ledger".to_string(),
         mesh_peers: 0, mesh_description: "BLE / Wi-Fi Direct store-and-forward mesh (MeshRouter). No native HCI driver yet — see TODO.".to_string(),
@@ -690,8 +748,8 @@ fn get_network_status(state: State<'_, AppState>) -> NetworkStatus {
         telemetry_summary: format!("CPU {:.0}°C · RAM {} / {} MB · Disk {:.1} GB free · Battery {}%", telemetry.health.cpu_temp_celsius, telemetry.health.memory_used_mb, telemetry.health.memory_total_mb, telemetry.health.disk_free_gb, telemetry.battery.as_ref().map(|b| b.percentage).unwrap_or(0)),
         appliance_action: format!("{:?}", action),
         reputation_description: "Peer trust tiers + spam rate limiting (ReputationEngine)".to_string(),
-        daemon_url: "ws://127.0.0.1:8765".to_string(), daemon_sessions: 0,
-    }
+        daemon_url: "ws://127.0.0.1:8765".to_string(), daemon_sessions,
+    })
 }
 
 #[tauri::command]
@@ -835,6 +893,8 @@ fn main() {
             get_channels,
             create_channel,
             run_bridge_probe,
+            get_daemon_status,
+            subscribe_daemon_events,
             quit_app
         ])
         .run(tauri::generate_context!())
@@ -895,6 +955,22 @@ mod tests {
         // Unknown protocols are rejected, never silently routed.
         let bad = crate::execute_routing_profile(&state, "optimal_cascade", "X", "hi", "CarrierPigeon", "Matrix").await;
         assert!(bad.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_daemon_subscription_broadcast_flow() {
+        let state = AppState::default();
+        {
+            let mut daemon = state.daemon.write().await;
+            daemon.start().await.unwrap();
+            daemon.register_session(crate::DESKTOP_SESSION_ID, "desktop_ui", 1700000000).await;
+        }
+        let daemon = state.daemon.read().await;
+        assert_eq!(daemon.session_count().await, 1);
+        assert!(daemon.subscribe_session(crate::DESKTOP_SESSION_ID, Some("ops-room".to_string())).await);
+        // Channel-targeted event reaches the subscriber; other channels do not.
+        assert_eq!(daemon.broadcast_event("message_dispatched", serde_json::json!({}), Some("ops-room")).await, 1);
+        assert_eq!(daemon.broadcast_event("message_dispatched", serde_json::json!({}), Some("other")).await, 0);
     }
 
     #[test]

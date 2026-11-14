@@ -21,6 +21,7 @@ interface SecurityStatus { identity_name: string; unified_id: string; fingerprin
 interface NetworkStatus { federation_channels: number; federation_description: string; mesh_peers: number; mesh_description: string; discovery_description: string; active_calls: number; call_description: string; outbox_queued: number; outbox_description: string; telemetry_summary: string; appliance_action: string; reputation_description: string; daemon_url: string; daemon_sessions: number; }
 interface ActivityEvent { id: string; kind: string; detail: string; timestamp: string; }
 interface ChannelInfo { id: string; name: string; topic: string; bridge_protocol: string; member_count: number; event_count: number; }
+interface DaemonStatus { url: string; running: boolean; sessions: number; subscribed_channel: string | null; }
 
 const PROTOCOLS = ['Signal', 'Matrix', 'Discord', 'Simplex', 'Tox', 'iMessage', 'SMS', 'Nostr'];
 
@@ -137,6 +138,8 @@ export default function App() {
   const [showAddChannel, setShowAddChannel] = useState(false);
   const [newChannelName, setNewChannelName] = useState('');
   const [newChannelTopic, setNewChannelTopic] = useState('');
+  const [daemon, setDaemon] = useState<DaemonStatus>({ url: 'ws://127.0.0.1:8765', running: false, sessions: 0, subscribed_channel: null });
+  const [subChannel, setSubChannel] = useState('ops-room');
   const [showTrayMenu, setShowTrayMenu] = useState(false);
   const [notice, setNotice] = useState('');
 
@@ -155,6 +158,7 @@ export default function App() {
     invoke('get_network_status').then((r) => setNetwork(r as NetworkStatus)).catch(console.error);
     invoke('get_activity_log').then((r) => setActivity(r as ActivityEvent[])).catch(console.error);
     invoke('get_channels').then((r) => setChannels(r as ChannelInfo[])).catch(console.error);
+    invoke('get_daemon_status').then((r) => setDaemon(r as DaemonStatus)).catch(console.error);
   }, [isTauri]);
 
   const handleSendMessage = (e: React.FormEvent) => {
@@ -228,6 +232,15 @@ export default function App() {
       setChannels((p) => [...p, { id: `chan_${Date.now()}`, name: newChannelName, topic: newChannelTopic || 'General', bridge_protocol: 'Matrix', member_count: 1, event_count: 0 }]);
       logLocal('CHANNEL_CREATED', `Federated channel '${newChannelName}' created on Matrix`);
       setNewChannelName(''); setNewChannelTopic(''); setShowAddChannel(false);
+    }
+  };
+
+  const handleSubscribeDaemon = (channel: string | null) => {
+    if (isTauri) {
+      invoke('subscribe_daemon_events', { channelId: channel }).then(() => { invoke('get_daemon_status').then((r) => setDaemon(r as DaemonStatus)).catch(console.error); invoke('get_activity_log').then((a) => setActivity(a as ActivityEvent[])).catch(console.error); }).catch((e) => setNotice(`Subscribe failed: ${e}`));
+    } else {
+      setDaemon((p) => ({ ...p, running: true, sessions: Math.max(p.sessions, 1), subscribed_channel: channel }));
+      logLocal('DAEMON_SUBSCRIBE', `Desktop session subscribed to channel ${JSON.stringify(channel)} (preview)`);
     }
   };
 
@@ -410,7 +423,13 @@ export default function App() {
             <div className="flex gap-1 flex-wrap mb-2">{capAreas.map((a) => <button key={a} onClick={() => setCapFilter(a)} className={`text-[10px] px-2 py-0.5 rounded border ${capFilter === a ? 'bg-sky-800 text-white border-sky-700' : 'bg-slate-800 text-slate-400 border-slate-700'}`}>{a}</button>)}</div>
             <p className="text-[11px] text-slate-400 leading-snug mb-1"><strong className="text-slate-300">Device:</strong> {network.telemetry_summary}. Appliance action: <Pill ok={network.appliance_action === 'Normal'}>{network.appliance_action}</Pill> <Tip text="Appliance policy (ApplianceConfig) can trigger LTE failover on power loss and safe shutdown on heat/low battery. Telemetry here is from TelemetryCollector." /></p>
             <p className="text-[11px] text-slate-400 leading-snug mb-1"><strong className="text-slate-300">Offline queue:</strong> {network.outbox_description} Queued now: {network.outbox_queued}.</p>
-            <p className="text-[11px] text-slate-400 leading-snug mb-2"><strong className="text-slate-300">Daemon:</strong> {network.daemon_url} · {network.daemon_sessions} client session(s) <Tip text="Desktop, mobile, and CLI clients talk to the headless engine over this WebSocket JSON-RPC daemon (server.rs). Mobile uses the same endpoint in its Settings screen." /></p>
+            <p className="text-[11px] text-slate-400 leading-snug mb-2"><strong className="text-slate-300">Daemon:</strong> {daemon.url} · {daemon.running ? 'running' : 'stopped'} · {daemon.sessions} client session(s) <Tip text="Desktop, mobile, and CLI clients talk to the headless engine over this WebSocket JSON-RPC daemon (server.rs). Subscribe this desktop session to a channel to receive channel-targeted message_dispatched events; sends broadcast to subscribers and log DAEMON_EVENT in Activity. Mobile uses the same endpoint in its Settings screen." /></p>
+            <div className="flex items-center gap-1.5 mb-2 text-[11px]">
+              <input value={subChannel} onChange={(e) => setSubChannel(e.target.value)} placeholder="Channel (e.g. ops-room)" aria-label="Daemon channel" className="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded px-2 py-1" />
+              <button onClick={() => handleSubscribeDaemon(subChannel || null)} className="px-2 py-1 bg-sky-700 hover:bg-sky-600 rounded font-semibold" title="Subscribe this session to the channel via the daemon SubscribeEvents RPC.">Subscribe</button>
+              <button onClick={() => handleSubscribeDaemon(null)} className="px-2 py-1 bg-slate-800 border border-slate-700 rounded" title="Clear the channel subscription (global events only).">Clear</button>
+            </div>
+            <p className="text-[11px] text-slate-500 mb-2">Subscribed channel: {daemon.subscribed_channel ?? 'none (global events)'}</p>
             <div className="flex flex-col gap-1.5">
               {shownCaps.map((c) => <div key={c.name} className="bg-slate-950/60 border border-slate-800 rounded p-2"><div className="flex justify-between gap-2"><span className="text-xs font-semibold">{c.name}</span><span className="text-[9px] text-slate-500 uppercase tracking-wide shrink-0">{c.area}</span></div><p className="text-[11px] text-slate-400 leading-snug">{c.description}</p><p className="text-[10px] font-mono text-slate-600 break-all">{c.engine_symbol} · {c.status}</p></div>)}
             </div>

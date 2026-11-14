@@ -110,6 +110,25 @@ impl WebSocketServer {
         sessions.remove(session_id);
     }
 
+    /// Subscribes a registered session to a channel (or clears it with None).
+    /// Returns false when the session is not registered. This is the typed
+    /// equivalent of the SubscribeEvents JSON-RPC request.
+    pub async fn subscribe_session(&self, session_id: &str, channel_id: Option<String>) -> bool {
+        let mut sessions = self.sessions.write().await;
+        match sessions.get_mut(session_id) {
+            Some(sess) => {
+                sess.subscribed_channel = channel_id;
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub async fn subscribed_channel(&self, session_id: &str) -> Option<Option<String>> {
+        let sessions = self.sessions.read().await;
+        sessions.get(session_id).map(|s| s.subscribed_channel.clone())
+    }
+
     pub async fn session_count(&self) -> usize {
         let sessions = self.sessions.read().await;
         sessions.len()
@@ -154,7 +173,7 @@ impl WebSocketServer {
             DaemonRequest::GetStatus => DaemonResponse::Ok {
                 message: "OmniCore engine daemon active".to_string(),
                 details: Some(serde_json::json!({
-                    "version": "0.4.5",
+                    "version": env!("CARGO_PKG_VERSION"),
                     "running": self.is_running,
                     "bind": self.url(),
                 })),
@@ -251,6 +270,22 @@ mod tests {
         .unwrap();
         let res_sub = server.handle_raw_request("sess_ui", &req_sub).await.unwrap();
         assert!(res_sub.contains("Subscribed to channel"));
+    }
+
+    #[tokio::test]
+    async fn test_subscribe_session_typed_api() {
+        let server = WebSocketServer::new("127.0.0.1", 8765);
+        // Unknown session cannot subscribe.
+        assert!(!server.subscribe_session("ghost", Some("general".to_string())).await);
+        server.register_session("sess_1", "desktop_ui", 1700000000).await;
+        assert!(server.subscribe_session("sess_1", Some("general".to_string())).await);
+        assert_eq!(server.subscribed_channel("sess_1").await, Some(Some("general".to_string())));
+        // Channel-targeted broadcast reaches only the subscriber.
+        assert_eq!(server.broadcast_event("ping", serde_json::json!({}), Some("general")).await, 1);
+        assert_eq!(server.broadcast_event("ping", serde_json::json!({}), Some("other")).await, 0);
+        // Clearing the subscription stops channel-targeted delivery.
+        assert!(server.subscribe_session("sess_1", None).await);
+        assert_eq!(server.broadcast_event("ping", serde_json::json!({}), Some("general")).await, 0);
     }
 
     #[tokio::test]
