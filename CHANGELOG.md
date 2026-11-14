@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 1.13.0:
+  - Routing metrics now persist across sends: execute_routing_profile reuses the router stored at engine init instead of building a fresh BridgeRegistry per message (which discarded circuit/latency metrics every send). New Diagnose button in Bridges runs BridgeHealthMonitor over the accumulated metrics (MultipathRouter::registry accessor added), showing attempts, latency, circuit state, and anomalies per bridge; never-attempted bridges honestly report CandidateStarvation.
 - 1.12.0:
   - Backup cipher upgraded to real AEAD: ZeroKnowledgeBackup now encrypts chunks with ChaCha20-Poly1305 (SHA-256 key derivation, deterministic per-chunk nonces, real SHA-256 chunk checksums — the checksum field previously held an FNV hash). Wrong-key and tamper restores fail at the AEAD tag; empty backups round-trip as one chunk. The XOR proof of concept is gone.
 - 1.11.0:

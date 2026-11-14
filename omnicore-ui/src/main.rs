@@ -113,6 +113,17 @@ pub mod state {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct BridgeDiagnosis {
+        pub protocol: String,
+        pub total_attempts: u32,
+        pub successful_attempts: u32,
+        pub average_latency_ms: u64,
+        pub consecutive_failures: u32,
+        pub circuit_state: String,
+        pub anomalies: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct BackupSummary {
         pub manifest_id: String,
         pub total_chunks: usize,
@@ -865,7 +876,12 @@ async fn execute_routing_profile(
     let fallbacks: Vec<ProtocolKind> = if fallback == primary { vec![] } else { vec![fallback] };
     let mut candidates = vec![primary];
     candidates.extend(fallbacks.iter().copied());
-    let router = build_router(state, &candidates).await;
+    // Reuse the router stored at engine init so circuit/latency metrics
+    // accumulate across sends; build a fresh one only before init (tests).
+    let router = match state.router.read().await.clone() {
+        Some(stored) => stored,
+        None => std::sync::Arc::new(build_router(state, &candidates).await),
+    };
     let payload = MessagePayload { recipient_id: recipient.to_string(), content: content.to_string(), fallback_protocol: fallback_name.to_string() };
     let now = now_epoch();
     let outcome: Result<(ProtocolKind, DeliveryState), anyhow::Error> = match profile {
@@ -1322,6 +1338,44 @@ async fn post_channel_message(state: State<'_, AppState>, channel_id: String, co
     Ok(info)
 }
 
+/// Diagnoses every bridge from the metrics accumulated in the shared
+/// router registry (BridgeHealthMonitor). Bridges never attempted report
+/// CandidateStarvation — an honest "no data yet", not a fake healthy.
+async fn diagnose_bridges_inner(state: &AppState) -> Vec<BridgeDiagnosis> {
+    use omnicore_engine::models::ProtocolKind as P;
+    let router = match state.router.read().await.clone() {
+        Some(stored) => stored,
+        None => std::sync::Arc::new(build_router(state, &[P::Signal, P::Matrix, P::Discord, P::Simplex, P::Tox, P::IMessage, P::Sms, P::Nostr]).await),
+    };
+    let registry = router.registry();
+    let guard = registry.read().await;
+    let monitor = omnicore_engine::telemetry::BridgeHealthMonitor::default();
+    let kinds = [P::Signal, P::Matrix, P::Discord, P::Simplex, P::Tox, P::IMessage, P::Sms, P::Nostr];
+    let mut out = Vec::new();
+    for kind in kinds {
+        let metric = guard.get_metrics(kind).cloned().unwrap_or_default();
+        let anomalies = monitor.diagnose_bridge(kind, &metric).iter().map(|a| format!("{:?}", a)).collect::<Vec<String>>();
+        out.push(BridgeDiagnosis {
+            protocol: kind.as_str().to_string(),
+            total_attempts: metric.total_attempts,
+            successful_attempts: metric.successful_attempts,
+            average_latency_ms: metric.average_latency_ms,
+            consecutive_failures: metric.consecutive_failures,
+            circuit_state: format!("{:?}", metric.circuit_state),
+            anomalies,
+        });
+    }
+    drop(guard);
+    let flagged = out.iter().filter(|d| !d.anomalies.is_empty()).count();
+    push_activity(state, "BRIDGE_DIAGNOSIS", format!("Diagnosed {} bridges: {} with anomalies (see Bridges panel)", out.len(), flagged));
+    out
+}
+
+#[tauri::command]
+async fn diagnose_bridges(state: State<'_, AppState>) -> Result<Vec<BridgeDiagnosis>, String> {
+    Ok(diagnose_bridges_inner(&state).await)
+}
+
 #[tauri::command]
 fn run_bridge_probe(state: State<'_, AppState>) -> Vec<ActivityEvent> {
     push_activity(&state, "HEALTH_PROBE", "Heartbeat probe sent to all open/half-open circuits (BridgeHeartbeatProber)".to_string());
@@ -1449,6 +1503,7 @@ fn main() {
             add_channel_member,
             post_channel_message,
             retry_outbox,
+            diagnose_bridges,
             run_bridge_probe,
             get_daemon_status,
             subscribe_daemon_events,
@@ -1533,6 +1588,22 @@ mod tests {
         let bridges = state2.bridges.lock().unwrap();
         assert!(bridges.iter().find(|b| b.protocol == "Nostr").unwrap().connected);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_router_metrics_persist_across_sends() {
+        let state = AppState::default();
+        // Simulate engine init: store a shared router, then send twice.
+        let router = crate::build_router(&state, &[omnicore_engine::models::ProtocolKind::Signal, omnicore_engine::models::ProtocolKind::Matrix]).await;
+        *state.router.write().await = Some(std::sync::Arc::new(router));
+        crate::execute_routing_profile(&state, "optimal_cascade", "Alice Montgomery", "one", "Signal", "Matrix").await.unwrap();
+        crate::execute_routing_profile(&state, "optimal_cascade", "Alice Montgomery", "two", "Signal", "Matrix").await.unwrap();
+        let diagnoses = crate::diagnose_bridges_inner(&state).await;
+        let signal = diagnoses.iter().find(|d| d.protocol == "Signal").unwrap();
+        assert!(signal.total_attempts >= 2, "metrics must accumulate in the shared router, got {} attempts", signal.total_attempts);
+        // A never-attempted bridge honestly reports starvation, not "healthy".
+        let nostr = diagnoses.iter().find(|d| d.protocol == "Nostr").unwrap();
+        assert!(nostr.anomalies.iter().any(|a| a.contains("CandidateStarvation")), "anomalies: {:?}", nostr.anomalies);
     }
 
     #[test]

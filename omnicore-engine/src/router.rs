@@ -1038,6 +1038,12 @@ impl MultipathRouter {
         Self { registry }
     }
 
+    /// Shared registry handle so clients can read accumulated routing
+    /// metrics (they persist as long as this router instance lives).
+    pub fn registry(&self) -> Arc<RwLock<BridgeRegistry>> {
+        Arc::clone(&self.registry)
+    }
+
     /// Attempts transmission on primary protocol; on failure, sequentially attempts fallback protocols.
     pub async fn route_with_cascade(
         &self,

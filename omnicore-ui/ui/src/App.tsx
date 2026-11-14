@@ -22,6 +22,7 @@ interface NetworkStatus { federation_channels: number; federation_description: s
 interface ActivityEvent { id: string; kind: string; detail: string; timestamp: string; }
 interface ChannelInfo { id: string; name: string; topic: string; bridge_protocol: string; member_count: number; event_count: number; }
 interface DaemonStatus { url: string; running: boolean; sessions: number; subscribed_channel: string | null; }
+interface BridgeDiagnosis { protocol: string; total_attempts: number; successful_attempts: number; average_latency_ms: number; consecutive_failures: number; circuit_state: string; anomalies: string[]; }
 
 const PROTOCOLS = ['Signal', 'Matrix', 'Discord', 'Simplex', 'Tox', 'iMessage', 'SMS', 'Nostr'];
 
@@ -140,6 +141,7 @@ export default function App() {
   const [newChannelTopic, setNewChannelTopic] = useState('');
   const [handoverTargets, setHandoverTargets] = useState<Record<string, string>>({});
   const [groupMemberId, setGroupMemberId] = useState('');
+  const [diagnoses, setDiagnoses] = useState<BridgeDiagnosis[]>([]);
   const [groupPostText, setGroupPostText] = useState('');
   const [groupChannelId, setGroupChannelId] = useState('chan_ops');
   const [daemon, setDaemon] = useState<DaemonStatus>({ url: 'ws://127.0.0.1:18765', running: false, sessions: 0, subscribed_channel: null });
@@ -402,7 +404,7 @@ export default function App() {
         </main>
 
         <aside className="w-[380px] bg-slate-900/80 border-l border-slate-800 overflow-y-auto shrink-0">
-          <Section title={`Bridges (${connectedCount}/${bridges.length} connected)`} tip="A bridge connects OmniCore to one network (daemon socket, homeserver, gateway, modem, or relay pool). Priority is the fallback order: lower tries first. Latency is the last measured round-trip." action={<button onClick={handleProbe} className="text-[11px] px-2 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded" title="Send heartbeat probes to open/half-open circuits and log the result in Activity.">Probe all</button>}>
+          <Section title={`Bridges (${connectedCount}/${bridges.length} connected)`} tip="A bridge connects OmniCore to one network (daemon socket, homeserver, gateway, modem, or relay pool). Priority is the fallback order: lower tries first. Latency is the last measured round-trip." action={<span className="flex gap-1"><button onClick={() => { if (isTauri) invoke('diagnose_bridges').then((d) => { setDiagnoses(d as BridgeDiagnosis[]); invoke('get_activity_log').then((a) => setActivity(a as ActivityEvent[])).catch(console.error); }).catch((e) => setNotice(`Diagnosis failed: ${e}`)); else setNotice('Diagnosis (preview): launch the desktop app for live bridge metrics.'); }} className="text-[11px] px-2 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded" title="Diagnose every bridge from accumulated routing metrics (BridgeHealthMonitor): latency spikes, failure tripping, circuit locks, and never-attempted starvation.">Diagnose</button><button onClick={handleProbe} className="text-[11px] px-2 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded" title="Send heartbeat probes to open/half-open circuits and log the result in Activity.">Probe all</button></span>}>
             <div className="flex flex-col gap-2">
               {bridges.map((b) => (
                 <div key={b.protocol} className="bg-slate-950/60 border border-slate-800 rounded p-2.5">
@@ -413,6 +415,7 @@ export default function App() {
                 </div>
               ))}
             </div>
+            {diagnoses.length > 0 && <div className="mt-2 bg-slate-950/60 border border-slate-800 rounded p-2.5 text-[11px]"><div className="font-semibold text-slate-300 mb-1">Bridge diagnosis <Tip text="From BridgeHealthMonitor over the shared router's accumulated metrics. Metrics now persist across sends because the desktop reuses one router. 'CandidateStarvation' simply means that bridge has not been attempted yet." /></div>{diagnoses.map((d) => <div key={d.protocol} className="flex justify-between gap-2 py-0.5"><span>{d.protocol}: {d.successful_attempts}/{d.total_attempts} ok · {d.average_latency_ms} ms · circuit {d.circuit_state}</span><span className={d.anomalies.length ? 'text-amber-300' : 'text-emerald-400'}>{d.anomalies.length ? d.anomalies.join('; ') : 'healthy'}</span></div>)}</div>}
           </Section>
 
           <Section title="Routing" tip="Routing decides how a message finds its person across networks: cascade order, retry policy, circuit breakers, dedup, and receipt checks. Choose one active profile; the capability list below (Engine panel) explains every strategy the engine implements.">
