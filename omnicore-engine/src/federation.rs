@@ -439,6 +439,11 @@ impl FederationManager {
         self.channels.get_mut(id)
     }
 
+    /// Inserts or replaces a channel (used when restoring a persisted snapshot).
+    pub fn insert_channel(&mut self, channel: FederatedChannel) {
+        self.channels.insert(channel.channel_id.clone(), channel);
+    }
+
     /// All channels sorted by id, for clients restoring group state on launch.
     pub fn list_channels(&self) -> Vec<&FederatedChannel> {
         let mut channels: Vec<&FederatedChannel> = self.channels.values().collect();

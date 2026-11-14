@@ -161,6 +161,9 @@ pub mod state {
         pub federation: tokio::sync::Mutex<omnicore_engine::federation::FederationManager>,
         // Router shared with the daemon so group posts can broadcast.
         pub router: tokio::sync::RwLock<Option<std::sync::Arc<omnicore_engine::router::MultipathRouter>>>,
+        // Federation snapshot loaded from DB (sync context), applied to the
+        // async federation mutex by init_engine.
+        pub pending_federation: Mutex<Option<Vec<omnicore_engine::federation::FederatedChannel>>>,
     }
 
     impl Default for AppState {
@@ -340,6 +343,7 @@ pub mod state {
                     mgr
                 }),
                 router: tokio::sync::RwLock::new(None),
+                pending_federation: Mutex::new(None),
             }
         }
     }
@@ -468,6 +472,15 @@ fn init_database_at(state: &AppState, path: &std::path::Path, key: &str) -> Resu
             }
         }
     }
+    // Stash any persisted federation snapshot; init_engine applies it to the
+    // async federation mutex (this function runs in a sync context).
+    if let Some(bytes) = db.get_key_material("settings", "desktop", "federation_channels").ok().flatten() {
+        if let Ok(channels) = serde_json::from_slice::<Vec<omnicore_engine::federation::FederatedChannel>>(&bytes) {
+            if !channels.is_empty() {
+                *state.pending_federation.lock().unwrap() = Some(channels);
+            }
+        }
+    }
     *state.db.lock().unwrap() = Some(db);
     Ok(summary)
 }
@@ -479,6 +492,23 @@ fn persist_setting(state: &AppState, key: &str, value: &str) {
     let Some(db) = db_guard.as_ref() else { return };
     if let Err(e) = db.save_key_material("settings", "desktop", key, value.as_bytes()) {
         push_activity(state, "DB_PERSIST_ERROR", format!("Failed to persist setting {}: {}", key, e));
+    }
+}
+
+/// Serializes all federated channels (members, event history, bridge state)
+/// into the SQLCipher key_store so groups survive restarts.
+async fn persist_federation_snapshot(state: &AppState) {
+    let channels: Vec<omnicore_engine::federation::FederatedChannel> = state.federation.lock().await.list_channels().into_iter().cloned().collect();
+    match serde_json::to_vec(&channels) {
+        Ok(bytes) => {
+            let db_guard = state.db.lock().unwrap();
+            if let Some(db) = db_guard.as_ref() {
+                if let Err(e) = db.save_key_material("settings", "desktop", "federation_channels", &bytes) {
+                    push_activity(state, "DB_PERSIST_ERROR", format!("Failed to persist federation snapshot: {}", e));
+                }
+            }
+        }
+        Err(e) => push_activity(state, "DB_PERSIST_ERROR", format!("Failed to serialize federation snapshot: {}", e)),
     }
 }
 
@@ -544,6 +574,17 @@ async fn init_engine(app: AppHandle, state: State<'_, AppState>) -> Result<Strin
             }
             Err(e) => push_activity(&state, "DB_PERSIST_ERROR", e),
         }
+    }
+    // Apply any federation snapshot restored from the DB.
+    let pending_federation = { state.pending_federation.lock().unwrap().take() };
+    if let Some(channels) = pending_federation {
+        let count = channels.len();
+        let mut mgr = state.federation.lock().await;
+        for ch in channels {
+            mgr.insert_channel(ch);
+        }
+        drop(mgr);
+        push_activity(&state, "FEDERATION_RESTORED", format!("Restored {} federated channel(s) from SQLCipher", count));
     }
     // Start the in-process daemon and register this UI as a client session,
     // so sends can broadcast events to subscribed sessions (see send_message).
@@ -1038,6 +1079,7 @@ async fn create_federated_channel(state: &AppState, name: &str, topic: &str, bri
     });
     drop(mgr);
     push_activity(state, "CHANNEL_CREATED", format!("Federated channel '{}' ({}) created on {} via FederationManager", name, id, bridge_protocol));
+    persist_federation_snapshot(state).await;
     info
 }
 
@@ -1080,6 +1122,7 @@ async fn perform_handover(state: &AppState, channel_id: &str, to_protocol: &str)
     let info = channel_to_info(mgr.get_channel(channel_id).ok_or("Channel vanished after handover")?);
     drop(mgr);
     push_activity(state, "BRIDGE_HANDOVER", format!("#{} migrated {} -> {} (signed, simulated key)", info.name, from.as_str(), to.as_str()));
+    persist_federation_snapshot(state).await;
     Ok(info)
 }
 
@@ -1098,6 +1141,7 @@ async fn add_channel_member(state: State<'_, AppState>, channel_id: String, unif
     let info = channel_to_info(channel);
     drop(mgr);
     push_activity(&state, if added { "MEMBER_ADDED" } else { "MEMBER_EXISTS" }, format!("{} {} #{}", display_name, if added { "joined" } else { "already in" }, info.name));
+    persist_federation_snapshot(&state).await;
     Ok(info)
 }
 
@@ -1127,6 +1171,7 @@ async fn post_channel_message(state: State<'_, AppState>, channel_id: String, co
     let info = mgr.get_channel(&channel_id).map(channel_to_info).ok_or_else(|| "Channel vanished after post".to_string())?;
     drop(mgr);
     push_activity(&state, "FEDERATED_POST", format!("Posted to #{} (event recorded; broadcast delivered to {} other member(s))", info.name, delivered_members));
+    persist_federation_snapshot(&state).await;
     Ok(info)
 }
 
@@ -1336,6 +1381,36 @@ mod tests {
         assert!(*state2.tor_enabled.lock().unwrap());
         let bridges = state2.bridges.lock().unwrap();
         assert!(bridges.iter().find(|b| b.protocol == "Nostr").unwrap().connected);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn test_federation_snapshot_roundtrip() {
+        let path = std::env::temp_dir().join(format!("omnicore_fed_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let state = AppState::default();
+        crate::init_database_at(&state, &path, "test_key").unwrap();
+        let created = crate::create_federated_channel(&state, "Persist Room", "topic", "Matrix").await;
+        {
+            let mut mgr = state.federation.lock().await;
+            let ch = mgr.get_channel_mut(&created.id).unwrap();
+            assert!(ch.add_member("alice_unified_1", "Alice Montgomery", "member"));
+            ch.post_message("local_user", "survive restart").unwrap();
+        }
+        crate::persist_federation_snapshot(&state).await;
+        *state.db.lock().unwrap() = None;
+        // Reopen: snapshot is stashed by DB init and applied to the manager.
+        let state2 = AppState::default();
+        crate::init_database_at(&state2, &path, "test_key").unwrap();
+        let pending = state2.pending_federation.lock().unwrap().take().expect("snapshot should be pending");
+        {
+            let mut mgr = state2.federation.lock().await;
+            for ch in pending { mgr.insert_channel(ch); }
+            let restored = mgr.get_channel(&created.id).expect("channel restored");
+            assert_eq!(restored.members.len(), 2);
+            assert_eq!(restored.event_history.len(), 1);
+            assert_eq!(restored.event_history[0].payload, "survive restart");
+        }
         let _ = std::fs::remove_file(&path);
     }
 
