@@ -352,6 +352,26 @@ fn greet(name: &str) -> String {
 
 pub const DESKTOP_SESSION_ID: &str = "desktop_main";
 
+/// Formats epoch seconds as "YYYY-MM-DD HH:MM UTC" without a date crate
+/// (Howard Hinnant's civil-from-days algorithm). Restored DB rows store raw
+/// epoch seconds; the UI should never show a bare 10-digit number.
+fn format_epoch_utc(epoch_secs: i64) -> String {
+    let days = epoch_secs.div_euclid(86_400);
+    let secs_of_day = epoch_secs.rem_euclid(86_400);
+    let (hh, mm) = (secs_of_day / 3600, (secs_of_day % 3600) / 60);
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if m <= 2 { y + 1 } else { y };
+    format!("{:04}-{:02}-{:02} {:02}:{:02} UTC", year, m, d, hh, mm)
+}
+
 fn contact_initials(name: &str) -> String {
     let initials: String = name.split_whitespace().filter_map(|w| w.chars().next()).collect::<String>().to_uppercase();
     if initials.is_empty() { "U".to_string() } else { initials }
@@ -408,7 +428,7 @@ fn init_database_at(state: &AppState, path: &std::path::Path, key: &str) -> Resu
                         recipient: m.recipient,
                         content: m.content,
                         protocol: m.protocol.as_str().to_string(),
-                        timestamp: m.timestamp.to_string(),
+                        timestamp: format_epoch_utc(m.timestamp),
                         is_outgoing: m.is_outgoing,
                         status: m.state.as_str().to_string(),
                     });
@@ -1144,6 +1164,13 @@ mod tests {
         // Unknown protocols are rejected, never silently routed.
         let bad = crate::execute_routing_profile(&state, "optimal_cascade", "X", "hi", "CarrierPigeon", "Matrix").await;
         assert!(bad.is_err());
+    }
+
+    #[test]
+    fn test_format_epoch_utc() {
+        assert_eq!(crate::format_epoch_utc(0), "1970-01-01 00:00 UTC");
+        assert_eq!(crate::format_epoch_utc(1_700_000_000), "2023-11-14 22:13 UTC");
+        assert_eq!(crate::format_epoch_utc(1_735_689_600), "2025-01-01 00:00 UTC");
     }
 
     #[test]

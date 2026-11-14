@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 1.5.2:
+  - Restored DB message timestamps now render as 'YYYY-MM-DD HH:MM UTC' (format_epoch_utc, civil-from-days; was raw epoch seconds). CI gained a release-bundle job (Linux release binary artifact) that runs only on v* tags or manual dispatch.
 - 1.5.1:
   - CI: added .github/workflows/ci.yml running engine tests, desktop (Tauri) tests, desktop frontend build, and mobile typecheck on push/PR to main. First run passed all four jobs (run 43570717448).
 - 1.5.0:
