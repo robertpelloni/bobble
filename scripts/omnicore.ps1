@@ -24,6 +24,11 @@ Set-Location $Root
 function Set-OpenSslIfNeeded {
   if (-not $env:OPENSSL_DIR -and (Test-Path 'C:\Program Files\OpenSSL-Win64\include\openssl\ssl.h')) {
     $env:OPENSSL_DIR = 'C:\Program Files\OpenSSL-Win64'
+    # The linker needs the VC lib dir specifically (libcrypto.lib lives in
+    # lib\VC\x64\MD, not lib) — without this a fresh target dir fails with
+    # LNK1181 even though OPENSSL_DIR is set.
+    if (-not $env:OPENSSL_LIB_DIR) { $env:OPENSSL_LIB_DIR = 'C:\Program Files\OpenSSL-Win64\lib\VC\x64\MD' }
+    if (-not $env:OPENSSL_INCLUDE_DIR) { $env:OPENSSL_INCLUDE_DIR = 'C:\Program Files\OpenSSL-Win64\include' }
     Write-Host "OPENSSL_DIR auto-set to $env:OPENSSL_DIR (required by bundled SQLCipher)"
   }
 }
