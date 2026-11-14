@@ -9,7 +9,9 @@ export default function App() {
 
   return (
     <View style={styles.appContainer}>
-      <StatusBar barStyle="light-content" backgroundColor="#020617" />
+      {/* RN 0.88 StatusBar no longer accepts backgroundColor; the app
+          container already paints #020617 behind it. */}
+      <StatusBar barStyle="light-content" />
       <View style={styles.contentContainer}>
         {currentTab === 'chat' && <ConversationScreen />}
         {currentTab === 'bridges' && <BridgeDeckScreen />}

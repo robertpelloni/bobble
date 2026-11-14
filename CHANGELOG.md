@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 1.17.0:
+  - Mobile migrated to Expo SDK 58 / React Native 0.88 / React 19.3 (the dependabot PR #5 upgrade, done properly): @types/react 19, TypeScript 5.9, expo-status-bar 58, and the RN 0.88 StatusBar backgroundColor removal fixed in App.tsx. Verified: npm ci --dry-run sync, tsc --noEmit clean, and expo export --platform android bundles 594 modules (1.5 MB Hermes). PR #5 can now be closed as superseded.
 - 1.16.0:
   - Mesh is interactive: the desktop holds a real MeshTransportDaemon; Groups, mesh & calls can attach peer channels (BLE / Wi-Fi Direct / UDP Broadcast) and shows connected peers, queued forwards, and seen packets from the daemon's MeshRouter. Network status mesh_peers now reads the daemon instead of a hardcoded 0. Native HCI/JNI hardware drivers remain pending and are labeled as such.
 - 1.15.0:
