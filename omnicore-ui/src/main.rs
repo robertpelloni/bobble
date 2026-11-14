@@ -124,6 +124,15 @@ pub mod state {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct PeerTrustInfo {
+        pub name: String,
+        pub score: i32,
+        pub tier: String,
+        pub successful_deliveries: u32,
+        pub spam_violations: u32,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct CallInfo {
         pub route_id: String,
         pub contact_name: String,
@@ -201,6 +210,8 @@ pub mod state {
         // Cross-protocol call gateway + active call routes.
         pub call_gateway: Mutex<omnicore_engine::call::CrossProtocolCallGateway>,
         pub call_routes: Mutex<Vec<CallInfo>>,
+        // Peer reputation: delivery acks build trust, spam would erode it.
+        pub reputation: Mutex<omnicore_engine::reputation::ReputationEngine>,
     }
 
     impl Default for AppState {
@@ -385,6 +396,7 @@ pub mod state {
                 last_backup: Mutex::new(None),
                 call_gateway: Mutex::new(omnicore_engine::call::CrossProtocolCallGateway::new()),
                 call_routes: Mutex::new(Vec::new()),
+                reputation: Mutex::new(omnicore_engine::reputation::ReputationEngine::new(omnicore_engine::reputation::SpamHeuristicFilter::default())),
             }
         }
     }
@@ -950,6 +962,8 @@ async fn send_message(
     let (used_protocol, status) = match execute_routing_profile(&state, &profile, &recipient, &content, &protocol, &fallback_protocol).await {
         Ok((used, delivery)) => {
             push_activity(&state, "DISPATCH_OK", format!("Message to {} delivered on {} via profile {} ({})", recipient, used, profile, delivery));
+            let trust = record_delivery_trust(&state, &recipient);
+            push_activity(&state, "TRUST_UPDATED", format!("{} trust: {} (score {}, {} deliveries)", recipient, trust.tier, trust.score, trust.successful_deliveries));
             (used, delivery)
         }
         Err(e) => {
@@ -1387,6 +1401,31 @@ async fn diagnose_bridges_inner(state: &AppState) -> Vec<BridgeDiagnosis> {
     out
 }
 
+/// Records a delivery acknowledgement for a peer and returns their trust.
+fn record_delivery_trust(state: &AppState, peer_name: &str) -> PeerTrustInfo {
+    let mut engine = state.reputation.lock().unwrap();
+    engine.record_delivery_ack(peer_name, now_epoch());
+    match engine.get_reputation(peer_name) {
+        Some(rep) => PeerTrustInfo {
+            name: peer_name.to_string(),
+            score: rep.score,
+            tier: format!("{:?}", rep.trust_tier()),
+            successful_deliveries: rep.successful_deliveries,
+            spam_violations: rep.spam_violations,
+        },
+        None => PeerTrustInfo { name: peer_name.to_string(), score: 0, tier: "Neutral".to_string(), successful_deliveries: 0, spam_violations: 0 },
+    }
+}
+
+#[tauri::command]
+fn get_reputations(state: State<'_, AppState>) -> Vec<PeerTrustInfo> {
+    let engine = state.reputation.lock().unwrap();
+    state.contacts.lock().unwrap().iter().map(|c| match engine.get_reputation(&c.name) {
+        Some(rep) => PeerTrustInfo { name: c.name.clone(), score: rep.score, tier: format!("{:?}", rep.trust_tier()), successful_deliveries: rep.successful_deliveries, spam_violations: rep.spam_violations },
+        None => PeerTrustInfo { name: c.name.clone(), score: 0, tier: "Neutral".to_string(), successful_deliveries: 0, spam_violations: 0 },
+    }).collect()
+}
+
 fn start_call_inner(state: &AppState, contact_name: &str, source_name: &str, target_name: &str) -> Result<CallInfo, String> {
     use omnicore_engine::call::{CallSession, MediaType};
     let source = omnicore_engine::models::ProtocolKind::from_str_name(source_name).ok_or_else(|| format!("Unknown protocol '{}'", source_name))?;
@@ -1591,6 +1630,7 @@ fn main() {
             start_call,
             end_call,
             get_calls,
+            get_reputations,
             run_bridge_probe,
             get_daemon_status,
             subscribe_daemon_events,
@@ -1675,6 +1715,17 @@ mod tests {
         let bridges = state2.bridges.lock().unwrap();
         assert!(bridges.iter().find(|b| b.protocol == "Nostr").unwrap().connected);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_delivery_ack_builds_trust() {
+        let state = AppState::default();
+        let first = crate::record_delivery_trust(&state, "Alice Montgomery");
+        assert_eq!(first.successful_deliveries, 1);
+        assert!(first.score > 0);
+        let second = crate::record_delivery_trust(&state, "Alice Montgomery");
+        assert_eq!(second.successful_deliveries, 2);
+        assert!(second.score > first.score, "trust must accumulate: {} -> {}", first.score, second.score);
     }
 
     #[test]

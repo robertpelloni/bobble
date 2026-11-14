@@ -24,6 +24,7 @@ interface ChannelInfo { id: string; name: string; topic: string; bridge_protocol
 interface DaemonStatus { url: string; running: boolean; sessions: number; subscribed_channel: string | null; }
 interface BridgeDiagnosis { protocol: string; total_attempts: number; successful_attempts: number; average_latency_ms: number; consecutive_failures: number; circuit_state: string; anomalies: string[]; }
 interface CallInfo { route_id: string; contact_name: string; source_protocol: string; target_protocol: string; state: string; }
+interface PeerTrustInfo { name: string; score: number; tier: string; successful_deliveries: number; spam_violations: number; }
 
 const PROTOCOLS = ['Signal', 'Matrix', 'Discord', 'Simplex', 'Tox', 'iMessage', 'SMS', 'Nostr'];
 
@@ -142,6 +143,7 @@ export default function App() {
   const [newChannelTopic, setNewChannelTopic] = useState('');
   const [handoverTargets, setHandoverTargets] = useState<Record<string, string>>({});
   const [groupMemberId, setGroupMemberId] = useState('');
+  const [reputations, setReputations] = useState<PeerTrustInfo[]>([]);
   const [calls, setCalls] = useState<CallInfo[]>([]);
   const [diagnoses, setDiagnoses] = useState<BridgeDiagnosis[]>([]);
   const [groupPostText, setGroupPostText] = useState('');
@@ -164,6 +166,8 @@ export default function App() {
       invoke('get_messages').then((res) => setMessages(res as MessageItem[])).catch(console.error);
       invoke('get_activity_log').then((res) => setActivity(res as ActivityEvent[])).catch(console.error);
       invoke('get_daemon_status').then((res) => setDaemon(res as DaemonStatus)).catch(console.error);
+      invoke('get_reputations').then((res) => setReputations(res as PeerTrustInfo[])).catch(console.error);
+      invoke('get_calls').then((res) => setCalls(res as CallInfo[])).catch(console.error);
     }).catch((e) => setEngineStatus(`Engine error: ${e}`));
     invoke('get_system_metrics').then((r) => setMetrics(r as SystemMetrics)).catch(console.error);
     invoke('get_contacts').then((r) => { const l = r as ContactInfo[]; if (l.length) { setContacts(l); setSelectedContact(l[0]); } }).catch(console.error);
@@ -183,7 +187,7 @@ export default function App() {
     if (!inputText.trim()) return;
     if (isTauri) {
       invoke('send_message', { recipient: selectedContact.name, content: inputText, protocol: primaryProtocol, fallbackProtocol })
-        .then((r) => { setMessages((p) => [...p, r as MessageItem]); setInputText(''); invoke('get_activity_log').then((a) => setActivity(a as ActivityEvent[])).catch(console.error); })
+        .then((r) => { setMessages((p) => [...p, r as MessageItem]); setInputText(''); invoke('get_activity_log').then((a) => setActivity(a as ActivityEvent[])).catch(console.error); invoke('get_reputations').then((x) => setReputations(x as PeerTrustInfo[])).catch(console.error); })
         .catch((err) => setNotice(`Send failed: ${err}`));
     } else {
       setMessages((p) => [...p, { id: `msg_${Date.now()}`, sender: 'You', recipient: selectedContact.name, content: inputText, protocol: `${primaryProtocol} (fallback: ${fallbackProtocol})`, timestamp: 'Just now', is_outgoing: true, status: 'dispatched' }]);
@@ -378,6 +382,7 @@ export default function App() {
                     <div className="flex items-center justify-between gap-2"><span className="font-semibold text-xs truncate">{c.name}</span><span className="text-[10px] text-slate-400 flex items-center gap-1"><span className={`w-1.5 h-1.5 rounded-full ${c.status === 'Online' ? 'bg-emerald-400' : c.status === 'Away' ? 'bg-amber-400' : 'bg-slate-500'}`} />{c.status}</span></div>
                     <div className="flex gap-1 mt-1 flex-wrap">{c.mapped_protocols.map((p) => <span key={p} className="text-[9px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300" title={`This person can be reached on ${p} (unified ID ${c.unified_id}).`}>{p}</span>)}</div>
                     <div className="text-[10px] text-slate-500 mt-0.5">Prefers {c.primary_protocol} → falls back to {c.fallback_protocol}</div>
+                    {(() => { const rep = reputations.find((r) => r.name === c.name); return rep ? <div className="mt-0.5"><span className={`text-[9px] px-1.5 py-0.5 rounded border ${rep.tier === 'Trusted' || rep.tier === 'Vetted' ? 'bg-emerald-950 text-emerald-300 border-emerald-800' : rep.tier === 'Blacklisted' || rep.tier === 'Untrusted' ? 'bg-rose-950 text-rose-300 border-rose-800' : 'bg-slate-800 text-slate-300 border-slate-700'}`} title={`Reputation (ReputationEngine): score ${rep.score}, ${rep.successful_deliveries} successful deliveries, ${rep.spam_violations} spam violations. Successful deliveries build trust; spam and failed signatures erode it.`}>Trust: {rep.tier} ({rep.score})</span></div> : null; })()}
                   </div>
                 </div>
               ))}
