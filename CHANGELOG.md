@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 1.11.0:
+  - Backup and QR pairing in the Security panel: Create backup snapshots contacts/messages/profile via ZeroKnowledgeBackup, Verify backup restores and checksum-verifies it in memory, and QR payload shows the omnicore://identity pairing payload. Also corrected the engine backup manifest, which claimed ChaCha20-Poly1305 while the implementation is a rolling-key XOR proof of concept — now honestly labeled in the manifest, UI, and tooltips.
 - 1.10.0:
   - Offline outbox wired: failed sends queue in OutboxManager (OUTBOX_QUEUED) instead of dying; the Engine panel shows the real queued count and a Retry outbox button re-runs ready messages through the active routing profile, appending and persisting successes (OUTBOX_RETRY_OK). Failures requeue with exponential backoff and drop after 5 attempts (OUTBOX_DROPPED), all visible in Activity.
 - 1.9.0:

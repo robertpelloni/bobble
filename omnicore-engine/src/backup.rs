@@ -84,7 +84,9 @@ impl ZeroKnowledgeBackup {
             manifest_id: format!("manifest_{}", now),
             total_chunks: chunks.len(),
             total_plaintext_size: plaintext.len(),
-            cipher_algorithm: "ChaCha20-Poly1305".to_string(),
+            // Honest label: create_backup currently uses a rolling-key XOR
+            // stream as a proof of concept, not a production AEAD cipher.
+            cipher_algorithm: "XOR rolling-key PoC (not production AEAD)".to_string(),
             chunk_checksums: checksums,
             created_at: now,
         };

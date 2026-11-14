@@ -113,6 +113,15 @@ pub mod state {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct BackupSummary {
+        pub manifest_id: String,
+        pub total_chunks: usize,
+        pub total_plaintext_size: usize,
+        pub cipher_algorithm: String,
+        pub created_at: u64,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct DaemonStatus {
         pub url: String,
         pub running: bool,
@@ -167,6 +176,8 @@ pub mod state {
         // Offline outbox: failed sends queue here with backoff retry.
         // Payload bytes are JSON {recipient, content, primary, fallback}.
         pub outbox: tokio::sync::Mutex<omnicore_engine::outbox::OutboxManager>,
+        // Last backup created this session (manifest + chunks, in memory).
+        pub last_backup: Mutex<Option<(omnicore_engine::backup::BackupManifest, Vec<omnicore_engine::backup::EncryptedChunk>)>>,
     }
 
     impl Default for AppState {
@@ -348,6 +359,7 @@ pub mod state {
                 router: tokio::sync::RwLock::new(None),
                 pending_federation: Mutex::new(None),
                 outbox: tokio::sync::Mutex::new(omnicore_engine::outbox::OutboxManager::new(omnicore_engine::outbox::RetryPolicy::default())),
+                last_backup: Mutex::new(None),
             }
         }
     }
@@ -1096,6 +1108,67 @@ fn toggle_tor(state: State<'_, AppState>) -> bool {
     now
 }
 
+fn backup_key() -> Vec<u8> {
+    std::env::var("OMNICORE_DB_KEY").unwrap_or_else(|_| "omnicore-local-dev-key".to_string()).into_bytes()
+}
+
+fn local_identity_card() -> omnicore_engine::identity::IdentityCard {
+    use std::collections::HashMap;
+    let mut mappings = HashMap::new();
+    mappings.insert(omnicore_engine::models::ProtocolKind::Signal, "alice_unified_1".to_string());
+    omnicore_engine::identity::IdentityCard::new("local_user", "Local User", "e8b23f1a99c0d44e71b8502c129afe88", mappings)
+}
+
+fn create_backup_inner(state: &AppState) -> Result<BackupSummary, String> {
+    // Snapshot the UI-visible state (contacts, messages, settings profile).
+    let plaintext = serde_json::json!({
+        "contacts": state.contacts.lock().unwrap().clone(),
+        "messages": state.messages.lock().unwrap().clone(),
+        "routing_profile": state.routing_profile.lock().unwrap().clone(),
+    });
+    let bytes = serde_json::to_vec(&plaintext).map_err(|e| e.to_string())?;
+    let backup = omnicore_engine::backup::ZeroKnowledgeBackup::new(omnicore_engine::backup::BackupConfig::default());
+    let (manifest, chunks) = backup.create_backup(&bytes, &backup_key()).map_err(|e| e.to_string())?;
+    let summary = BackupSummary {
+        manifest_id: manifest.manifest_id.clone(),
+        total_chunks: manifest.total_chunks,
+        total_plaintext_size: manifest.total_plaintext_size,
+        cipher_algorithm: manifest.cipher_algorithm.clone(),
+        created_at: manifest.created_at,
+    };
+    *state.last_backup.lock().unwrap() = Some((manifest, chunks));
+    push_activity(state, "BACKUP_CREATED", format!("Encrypted backup {} created: {} chunk(s), {} bytes ({})", summary.manifest_id, summary.total_chunks, summary.total_plaintext_size, summary.cipher_algorithm));
+    Ok(summary)
+}
+
+fn verify_backup_inner(state: &AppState) -> Result<String, String> {
+    let stored = state.last_backup.lock().unwrap().clone();
+    let (manifest, chunks) = stored.ok_or_else(|| "No backup created yet this session".to_string())?;
+    let backup = omnicore_engine::backup::ZeroKnowledgeBackup::new(omnicore_engine::backup::BackupConfig::default());
+    let restored = backup.restore_backup(&manifest, &chunks, &backup_key()).map_err(|e| e.to_string())?;
+    // Restored bytes must be the JSON snapshot we created.
+    let parsed: serde_json::Value = serde_json::from_slice(&restored).map_err(|e| format!("Restored backup is not valid snapshot JSON: {}", e))?;
+    let contacts = parsed["contacts"].as_array().map(|a| a.len()).unwrap_or(0);
+    Ok(format!("Backup {} verified: {} bytes restored, checksums OK, {} contact(s) in snapshot", manifest.manifest_id, restored.len(), contacts))
+}
+
+#[tauri::command]
+fn create_backup(state: State<'_, AppState>) -> Result<BackupSummary, String> {
+    create_backup_inner(&state)
+}
+
+#[tauri::command]
+fn verify_backup(state: State<'_, AppState>) -> Result<String, String> {
+    let result = verify_backup_inner(&state)?;
+    push_activity(&state, "BACKUP_VERIFIED", result.clone());
+    Ok(result)
+}
+
+#[tauri::command]
+fn get_identity_qr() -> Result<String, String> {
+    local_identity_card().to_qr_payload().map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn export_identity_card() -> Result<String, String> {
     use std::collections::HashMap;
@@ -1365,6 +1438,9 @@ fn main() {
             get_security_status,
             toggle_tor,
             export_identity_card,
+            create_backup,
+            verify_backup,
+            get_identity_qr,
             get_network_status,
             get_activity_log,
             get_channels,
@@ -1457,6 +1533,23 @@ mod tests {
         let bridges = state2.bridges.lock().unwrap();
         assert!(bridges.iter().find(|b| b.protocol == "Nostr").unwrap().connected);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_backup_create_and_verify_roundtrip() {
+        let state = AppState::default();
+        // Verify before creation is an explicit error, not a fake success.
+        assert!(crate::verify_backup_inner(&state).is_err());
+        let summary = crate::create_backup_inner(&state).unwrap();
+        assert!(summary.total_chunks >= 1);
+        assert!(summary.total_plaintext_size > 0);
+        assert!(summary.cipher_algorithm.contains("PoC"), "cipher must be honestly labeled: {}", summary.cipher_algorithm);
+        let verified = crate::verify_backup_inner(&state).unwrap();
+        assert!(verified.contains("checksums OK"), "verified: {}", verified);
+        assert!(verified.contains("4 contact(s)"), "verified: {}", verified);
+        // QR payload round-trips the identity card scheme.
+        let qr = crate::local_identity_card().to_qr_payload().unwrap();
+        assert!(qr.starts_with("omnicore://identity?data="));
     }
 
     #[tokio::test]
