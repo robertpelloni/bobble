@@ -1,0 +1,73 @@
+name: CI
+
+# Runs the same gates the unified launcher runs locally (scripts/omnicore.*):
+# engine + desktop Rust tests, desktop frontend typecheck/build, mobile typecheck.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  rust-engine:
+    name: Engine tests (Rust)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install OpenSSL headers (bundled SQLCipher links OpenSSL)
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test engine
+        run: cargo test -p omnicore-engine
+
+  rust-desktop:
+    name: Desktop tests (Tauri)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Tauri + OpenSSL system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config libglib2.0-dev libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build frontend (Tauri embeds ui/dist)
+        working-directory: omnicore-ui/ui
+        run: |
+          npm ci
+          npm run build
+      - name: Test desktop shell
+        run: cargo test -p omnicore-ui
+
+  frontend:
+    name: Frontend build (desktop UI)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: omnicore-ui/ui/package-lock.json
+      - name: Typecheck and build
+        working-directory: omnicore-ui/ui
+        run: |
+          npm ci
+          npm run build
+
+  mobile:
+    name: Mobile typecheck (Expo)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: omnicore-mobile/package-lock.json
+      - name: Typecheck
+        working-directory: omnicore-mobile
+        run: |
+          npm ci
+          npx tsc --noEmit -p tsconfig.json
