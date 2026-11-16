@@ -9,8 +9,12 @@ echo "=== OmniCore Multi-Target Bundler (Target: ${TARGET}) ==="
 case "${TARGET}" in
   desktop)
     echo "--> Bundling Desktop application via Tauri..."
-    cd omnicore-ui/ui && npm run build && cd ../..
-    cargo build --package omnicore-ui --release
+    # Plain `cargo build` keeps the dev cfg, so the window loads devUrl
+    # (localhost:1420) instead of the embedded frontend. The Tauri CLI sets
+    # production mode and embeds ui/dist.
+    cd omnicore-ui/ui && npm run build && cd ..
+    ./ui/node_modules/.bin/tauri build --no-bundle
+    cd ..
     echo "Desktop binary built: target/release/omnicore-ui"
     ;;
   android)
@@ -29,8 +33,9 @@ case "${TARGET}" in
     ;;
   all)
     echo "--> Bundling all supported platforms (Desktop + Mobile)..."
-    cd omnicore-ui/ui && npm run build && cd ../..
-    cargo build --workspace --release
+    cd omnicore-ui/ui && npm run build && cd ..
+    ./ui/node_modules/.bin/tauri build --no-bundle
+    cd ..
     echo "Desktop release binaries compiled."
     cd omnicore-mobile
     npx --yes expo export || echo "Expo multi-platform bundle export dry-run completed"
