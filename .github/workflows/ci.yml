@@ -77,8 +77,11 @@ jobs:
         run: |
           npm ci
           npm run build
-      - name: Compile release desktop binary
-        run: cargo build -p omnicore-ui --release
+      # Plain cargo build keeps the dev cfg (window loads devUrl, not the
+      # embedded frontend). The Tauri CLI produces the real release binary.
+      - name: Compile release desktop binary (Tauri CLI)
+        working-directory: omnicore-ui
+        run: ./ui/node_modules/.bin/tauri build --no-bundle
       - uses: actions/upload-artifact@v4
         with:
           name: omnicore-ui-linux-release
