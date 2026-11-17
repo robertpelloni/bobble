@@ -87,5 +87,5 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 
 - [ ] Live-network credentialled delivery proof (needs user: Matrix homeserver / signald / Discord token + host choice).
 - [ ] Human tray click-through check on Windows (left-click show, Pause workers, Quit servers only) while the app runs.
-- [ ] Expo 58 / React Native 0.88 migration (dependabot PR #5) as a dedicated migration task.
+- [x] Expo 58 / React Native 0.88 migration (shipped in v1.17.0; dependabot PR #5 superseded, no longer open).
 

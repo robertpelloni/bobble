@@ -4,9 +4,9 @@ A messaging aggregator that aims to unify multiple platforms — Signal, SimpleX
 
 ## Status
 
-**Active development (v1.1.0).** Last significant activity: **2026-11-13** — consolidated single-page dashboard representing the full engine (see `CHANGELOG.md` and `MANUAL.md`). Earlier Nov 9–11 work shipped v0.9.8–v1.0.4: bandwidth quota/traffic shaping, circuit auto-reset, federated channel bridge handover, route dispersal, a federated delivery ledger, percentile-bounded routing, and a silent-delivery-drop canary detector.
+**Active development (v1.17.1).** Last significant activity: **2026-11-16** — proper Tauri CLI release builds with embedded frontend (v1.17.1) and the Expo 58 / React Native 0.88 mobile migration (v1.17.0). See `CHANGELOG.md` and `MANUAL.md` for the full history back to the consolidated single-page dashboard in v1.1.0.
 
-This is an ambitious, early-stage project. The architecture below is as documented in the repo; no release, packaged build, or evidence of live cross-platform messaging is in the tree. The previous README listed v0.5.2 — it was out of date.
+This is an ambitious, early-stage project. A standalone release binary is verified to launch, serve its embedded UI, and route messages through the engine's mock bridges over the local daemon (ws://127.0.0.1:18765); no live cross-platform network delivery has been proven yet — the bridges are engine skeletons without credentialled transports.
 
 ## Architecture
 
