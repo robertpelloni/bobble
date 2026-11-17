@@ -32,23 +32,36 @@ function Set-OpenSslIfNeeded {
     Write-Host "OPENSSL_DIR auto-set to $env:OPENSSL_DIR (required by bundled SQLCipher)"
   }
 }
-function Invoke-BelowNormal([string]$File, [string[]]$Args) {
-  $p = Start-Process -FilePath $File -ArgumentList $Args -NoNewWindow -PassThru
+function Invoke-BelowNormal([string]$File, [string[]]$ArgList) {
+  # NOTE: the parameter must not be named $Args — that is PowerShell's
+  # automatic variable and Start-Process then receives a null ArgumentList.
+  # Uses System.Diagnostics.Process directly because Start-Process handles
+  # intermittently report a null ExitCode after WaitForExit in PS 5.1.
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $File
+  $psi.Arguments = ($ArgList | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } }) -join ' '
+  $psi.UseShellExecute = $false
+  $p = [System.Diagnostics.Process]::Start($psi)
   try { $p.PriorityClass = 'BelowNormal' } catch { Write-Warning "Could not lower priority: $_" }
   $p.WaitForExit()
-  if ($p.ExitCode -ne 0) { throw "$File $($Args -join ' ') failed with exit code $($p.ExitCode)" }
+  if ($p.ExitCode -ne 0) { throw "$File $($ArgList -join ' ') failed with exit code $($p.ExitCode)" }
 }
 
 switch ($Command) {
   'build' {
     Set-OpenSslIfNeeded
-    Push-Location omnicore-ui/ui; try { npm install; npm run build } finally { Pop-Location }
+    # Vite writes timing warnings to stderr; with ErrorActionPreference=Stop
+    # PowerShell turns those into terminating errors, so run npm with
+    # Continue and gate on the exit code instead.
+    $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    Push-Location omnicore-ui/ui; try { npm install; if ($LASTEXITCODE -ne 0) { throw 'npm install failed' }; npm run build; if ($LASTEXITCODE -ne 0) { throw 'frontend build failed' } } finally { Pop-Location; $ErrorActionPreference = $prevEAP }
     Invoke-BelowNormal 'cargo' @('build', '--workspace')
     Write-Host '=== OmniCore build successful ==='
   }
   'test' {
     Set-OpenSslIfNeeded
-    Push-Location omnicore-ui/ui; try { npm run build } finally { Pop-Location }
+    $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    Push-Location omnicore-ui/ui; try { npm run build; if ($LASTEXITCODE -ne 0) { throw 'frontend build failed' } } finally { Pop-Location; $ErrorActionPreference = $prevEAP }
     Invoke-BelowNormal 'cargo' @('test', '--workspace')
     Write-Host '=== All OmniCore tests passed ==='
   }

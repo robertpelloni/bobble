@@ -11,7 +11,7 @@
 | Package bundles | `.\scripts\omnicore.ps1 bundle all` | `./scripts/omnicore.sh bundle all` |
 | Status (version, tools, git) | `.\scripts\omnicore.ps1 status` | `./scripts/omnicore.sh status` |
 
-Legacy equivalents (kept, archived in `archive/`): `build.sh`, `test.sh`, `dev.sh`, `run.sh`, `bundle.sh`.
+Legacy single-purpose scripts (`build.sh`, `test.sh`, `dev.sh`, `run.sh`) were byte-identical duplicates of the launcher commands; the top-level copies were removed in v1.18.1 and the originals remain in `archive/`. `bundle.sh` is NOT legacy — it is the active multi-target bundler invoked by both launchers' `bundle` command (its older version is in `archive/`).
 
 ## Windows build prerequisite (found 2026-11-13)
 

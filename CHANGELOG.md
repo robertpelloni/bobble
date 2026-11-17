@@ -2,6 +2,9 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 1.18.1:
+  - Scripts consolidated: top-level build.sh/test.sh/dev.sh/run.sh were byte-identical duplicates of the unified launcher commands and were removed (originals remain in scripts/archive/; bundle.sh is the active bundler and stays). DEPLOY.md and scripts/README.md now point at omnicore.ps1/omnicore.sh only.
+  - Fixed the Windows launcher (scripts/omnicore.ps1), which could not complete a build/test run: the Invoke-BelowNormal parameter used a reserved automatic-variable name (null ArgumentList), Vite stderr warnings became terminating errors under ErrorActionPreference=Stop, and Start-Process handles reported a null ExitCode. The helper now uses System.Diagnostics.Process and npm steps gate on exit codes. Verified: omnicore.ps1 test completes with === All OmniCore tests passed === (154 tests). CI for v1.18.0 (run 44032394045) is green on all non-gated jobs.
 - 1.18.0:
   - Identity pairing is now bidirectional: the Security panel imports a peer identity QR payload or exported JSON (import_identity_card), verifies the card signature in the engine, and adds the peer to People once (deduped by unified_id, persisted to SQLCipher when open). Pre-key bundles are interactive too: Generate pre-keys (10) publishes an ephemeral PreKeyBundle and Consume one spends exactly one one-time prekey, erroring when exhausted. Covered by test_import_identity_card_qr_json_and_tamper and test_prekey_bundle_generate_and_consume.
   - Security fix found by that test: IdentityCard signatures did not cover the display name, so a captured card could be re-labeled with any name and still verify. The signed payload now includes display_name in IdentityCard::new and verify_signature (test_identity_card_display_name_is_signed). Also synced stale mobile app.json version (was 1.0.4).
