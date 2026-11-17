@@ -308,6 +308,34 @@ impl Database {
         Ok(self.conn.last_insert_rowid())
     }
 
+    /// Recent attachments with the recipient of their parent message,
+    /// newest first. Used to restore attachment history on launch.
+    pub fn list_recent_attachments(&self, limit: usize) -> Result<Vec<(AttachmentRecord, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT a.id, a.message_id, a.file_name, a.mime_type, a.file_size_bytes, a.storage_path, a.sha256_hash, m.recipient \
+             FROM attachments a JOIN messages m ON m.id = a.message_id ORDER BY a.id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            Ok((
+                AttachmentRecord {
+                    id: row.get(0)?,
+                    message_id: row.get(1)?,
+                    file_name: row.get(2)?,
+                    mime_type: row.get(3)?,
+                    file_size_bytes: row.get(4)?,
+                    storage_path: row.get(5)?,
+                    sha256_hash: row.get(6)?,
+                },
+                row.get::<_, String>(7)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
     pub fn save_key_material(
         &self,
         protocol: &str,
@@ -479,6 +507,13 @@ mod tests {
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         ).unwrap();
         assert_eq!(attach_id, 1);
+
+        // Recent-attachments listing joins back to the parent recipient.
+        let recent = db.list_recent_attachments(10).unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].0.file_name, "report.pdf");
+        assert_eq!(recent[0].1, "Charlie");
+        assert!(db.list_recent_attachments(0).unwrap().is_empty());
 
         let _ = fs::remove_file(db_path);
     }

@@ -158,6 +158,17 @@ pub mod state {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct AttachmentInfo {
+        pub id: i64,
+        pub message_id: i64,
+        pub recipient: String,
+        pub file_name: String,
+        pub mime_type: String,
+        pub file_size_bytes: i64,
+        pub sha256_hash: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct ImportedIdentity {
         pub display_name: String,
         pub unified_id: String,
@@ -241,6 +252,8 @@ pub mod state {
         // Published pre-key bundle for offline-first encrypted handshakes;
         // one-time keys are consumed singly and never reused.
         pub prekey_bundle: Mutex<Option<omnicore_engine::ratchet::PreKeyBundle>>,
+        // Attachments recorded this session + restored from SQLCipher.
+        pub attachments: Mutex<Vec<AttachmentInfo>>,
     }
 
     impl Default for AppState {
@@ -428,6 +441,7 @@ pub mod state {
                 reputation: Mutex::new(omnicore_engine::reputation::ReputationEngine::new(omnicore_engine::reputation::SpamHeuristicFilter::default())),
                 mesh: Mutex::new(omnicore_engine::mesh::MeshTransportDaemon::new("local_user")),
             prekey_bundle: Mutex::new(None),
+            attachments: Mutex::new(Vec::new()),
             }
         }
     }
@@ -554,6 +568,17 @@ fn init_database_at(state: &AppState, path: &std::path::Path, key: &str) -> Resu
                 b.connected = v == "1";
                 b.status = if b.connected { "Connected".to_string() } else { "Disconnected".to_string() };
             }
+        }
+    }
+    // Restore attachment history (metadata + hashes; blobs stay in the
+    // encrypted DB record, file bytes themselves are not duplicated here).
+    if let Ok(rows) = db.list_recent_attachments(100) {
+        let infos: Vec<AttachmentInfo> = rows.into_iter().map(|(a, recipient)| AttachmentInfo {
+            id: a.id, message_id: a.message_id, recipient, file_name: a.file_name,
+            mime_type: a.mime_type, file_size_bytes: a.file_size_bytes, sha256_hash: a.sha256_hash,
+        }).collect();
+        if !infos.is_empty() {
+            *state.attachments.lock().unwrap() = infos;
         }
     }
     // Stash any persisted federation snapshot; init_engine applies it to the
@@ -699,6 +724,80 @@ fn persist_outgoing(state: &AppState, recipient_name: &str, used_protocol: &str,
         Ok(id) => push_activity(state, "DB_PERSIST", format!("Message #{} persisted to SQLCipher for {}", id, recipient_name)),
         Err(e) => push_activity(state, "DB_PERSIST_ERROR", format!("Failed to persist message for {}: {}", recipient_name, e)),
     }
+}
+
+/// Maximum attachment size accepted through the IPC file picker. The bytes
+/// cross the Tauri boundary as a JSON number array, so this stays modest;
+/// larger files need a streaming/path-based transfer (future work).
+pub const MAX_ATTACHMENT_BYTES: usize = 2_097_152; // 2 MiB
+
+/// Records a file attachment for a conversation. The bytes are hashed
+/// (SHA-256) and, when the DB is open, a real message row + attachments
+/// row are written to SQLCipher so the attachment survives restarts and
+/// shows in history. Bridges are text transports, so the conversation
+/// carries an attachment label message; the file metadata and hash are
+/// the durable record. Validation fails closed (empty/oversize/unknown
+/// recipient are errors, never silent drops).
+fn attach_file_inner(state: &AppState, recipient_name: &str, file_name: &str, mime_type: &str, data: Vec<u8>) -> Result<AttachmentInfo, String> {
+    if file_name.trim().is_empty() {
+        return Err("Attachment file name is empty".to_string());
+    }
+    if data.is_empty() {
+        return Err("Attachment file is empty".to_string());
+    }
+    if data.len() > MAX_ATTACHMENT_BYTES {
+        return Err(format!("Attachment exceeds {} byte limit", MAX_ATTACHMENT_BYTES));
+    }
+    let contact = state.contacts.lock().unwrap().iter().find(|c| c.name == recipient_name).cloned();
+    let contact = contact.ok_or_else(|| format!("Unknown recipient '{}'", recipient_name))?;
+    let sha256_hash = omnicore_engine::backup::sha256_hex(&data);
+    let mime = if mime_type.trim().is_empty() { "application/octet-stream" } else { mime_type.trim() };
+    let label = format!("[Attachment] {} ({} bytes, sha256 {}…)", file_name, data.len(), &sha256_hash[..12.min(sha256_hash.len())]);
+    // Persist message + attachment rows when the DB is open.
+    let (mut attachment_id, mut message_id) = (0i64, 0i64);
+    {
+        let db_guard = state.db.lock().unwrap();
+        if let Some(db) = db_guard.as_ref() {
+            let protocol = omnicore_engine::models::ProtocolKind::from_str_name(&contact.primary_protocol).unwrap_or(omnicore_engine::models::ProtocolKind::Signal);
+            let result = (|| -> Result<(i64, i64), String> {
+                let thread_id = db.get_or_create_direct_thread(contact.id, recipient_name).map_err(|e| e.to_string())?;
+                let mid = db.record_message_with_thread(contact.id, thread_id, protocol, "You", recipient_name, &label, true).map_err(|e| e.to_string())?;
+                let aid = db.insert_attachment(mid, file_name, mime, data.len() as i64, &format!("sqlcipher://attachments/{}", sha256_hash), &sha256_hash).map_err(|e| e.to_string())?;
+                Ok((aid, mid))
+            })();
+            match result {
+                Ok((aid, mid)) => { attachment_id = aid; message_id = mid; }
+                Err(e) => return Err(format!("Failed to persist attachment: {}", e)),
+            }
+        }
+    }
+    let info = AttachmentInfo {
+        id: attachment_id, message_id, recipient: recipient_name.to_string(),
+        file_name: file_name.to_string(), mime_type: mime.to_string(),
+        file_size_bytes: data.len() as i64, sha256_hash,
+    };
+    state.attachments.lock().unwrap().insert(0, info.clone());
+    {
+        let mut messages = state.messages.lock().unwrap();
+        let next_id = format!("msg_{}", messages.len() + 1);
+        messages.push(MessageItem {
+            id: next_id, sender: "You".to_string(), recipient: recipient_name.to_string(),
+            content: label, protocol: contact.primary_protocol.clone(), timestamp: "Now".to_string(),
+            is_outgoing: true, status: "dispatched".to_string(),
+        });
+    }
+    push_activity(state, "ATTACHMENT_RECORDED", format!("Attachment {} ({} bytes) recorded for {}", file_name, data.len(), recipient_name));
+    Ok(info)
+}
+
+#[tauri::command]
+fn attach_file(state: State<'_, AppState>, recipient_name: String, file_name: String, mime_type: String, data: Vec<u8>) -> Result<AttachmentInfo, String> {
+    attach_file_inner(&state, &recipient_name, &file_name, &mime_type, data)
+}
+
+#[tauri::command]
+fn get_attachments(state: State<'_, AppState>) -> Vec<AttachmentInfo> {
+    state.attachments.lock().unwrap().clone()
 }
 
 #[tauri::command]
@@ -1783,6 +1882,8 @@ fn main() {
             add_contact,
             get_messages,
             send_message,
+            attach_file,
+            get_attachments,
             get_bridges,
             toggle_bridge,
             toggle_servers,
@@ -2164,6 +2265,42 @@ mod tests {
         }
         assert!(crate::consume_prekey_inner(&state).is_err(), "exhausted bundle must error");
         assert!(crate::generate_prekey_bundle_inner(&state, 0).is_err(), "empty bundle must be rejected");
+    }
+
+    #[test]
+    fn test_attach_file_records_and_restores() {
+        let path = std::env::temp_dir().join(format!("omnicore_attach_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let state = AppState::default();
+        crate::init_database_at(&state, &path, "test_key").unwrap();
+        let data = b"hello attachment bytes".to_vec();
+        let info = crate::attach_file_inner(&state, "Alice Montgomery", "notes.txt", "text/plain", data.clone()).expect("attach should succeed");
+        assert_eq!(info.file_name, "notes.txt");
+        assert_eq!(info.file_size_bytes, data.len() as i64);
+        // Hash must be the real SHA-256 of the bytes, and the DB row must exist.
+        assert_eq!(info.sha256_hash, omnicore_engine::backup::sha256_hex(&data));
+        {
+            let db_guard = state.db.lock().unwrap();
+            let rows = db_guard.as_ref().unwrap().list_recent_attachments(10).unwrap();
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].0.file_name, "notes.txt");
+            assert_eq!(rows[0].1, "Alice Montgomery");
+        }
+        assert!(state.messages.lock().unwrap().iter().any(|m| m.content.contains("notes.txt")));
+        // Validation fails closed: empty file, empty name, unknown recipient, oversize.
+        assert!(crate::attach_file_inner(&state, "Alice Montgomery", "x.bin", "application/octet-stream", Vec::new()).is_err());
+        assert!(crate::attach_file_inner(&state, "Alice Montgomery", "", "text/plain", b"x".to_vec()).is_err());
+        assert!(crate::attach_file_inner(&state, "Nobody Unknown", "x.bin", "text/plain", b"x".to_vec()).is_err());
+        assert!(crate::attach_file_inner(&state, "Alice Montgomery", "big.bin", "application/octet-stream", vec![0u8; 2_097_153]).is_err());
+        // Restore: a fresh state against the same DB sees the attachment again.
+        *state.db.lock().unwrap() = None;
+        let state2 = AppState::default();
+        crate::init_database_at(&state2, &path, "test_key").unwrap();
+        let restored = state2.attachments.lock().unwrap();
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].file_name, "notes.txt");
+        drop(restored);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

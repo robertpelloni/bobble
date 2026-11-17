@@ -2,6 +2,9 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 1.19.0:
+  - Attachments are real: the composer Attach button opens a file picker (max 2 MiB through IPC), hashes the bytes with SHA-256, writes a message row plus an attachments row to SQLCipher (Database::insert_attachment, new Database::list_recent_attachments), shows an attachment label in the thread and file chips above the composer, and restores attachment history on launch. backup::sha256_hex is now public so hashing is not duplicated. Covered by test_attach_file_records_and_restores (DB row, hash, restore, and empty/oversize/unknown-recipient rejection) plus the extended engine attachment test. Bridges remain text transports, so metadata + hash are the durable record and the UI says so.
+  - CI for v1.18.1 (run 44034095641) verified terminal green on all non-gated jobs.
 - 1.18.1:
   - Scripts consolidated: top-level build.sh/test.sh/dev.sh/run.sh were byte-identical duplicates of the unified launcher commands and were removed (originals remain in scripts/archive/; bundle.sh is the active bundler and stays). DEPLOY.md and scripts/README.md now point at omnicore.ps1/omnicore.sh only.
   - Fixed the Windows launcher (scripts/omnicore.ps1), which could not complete a build/test run: the Invoke-BelowNormal parameter used a reserved automatic-variable name (null ArgumentList), Vite stderr warnings became terminating errors under ErrorActionPreference=Stop, and Start-Process handles reported a null ExitCode. The helper now uses System.Diagnostics.Process and npm steps gate on exit codes. Verified: omnicore.ps1 test completes with === All OmniCore tests passed === (154 tests). CI for v1.18.0 (run 44032394045) is green on all non-gated jobs.

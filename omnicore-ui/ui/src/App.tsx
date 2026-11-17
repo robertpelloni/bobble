@@ -29,6 +29,7 @@ interface BridgeDiagnosis { protocol: string; total_attempts: number; successful
 interface CallInfo { route_id: string; contact_name: string; source_protocol: string; target_protocol: string; state: string; }
 interface PeerTrustInfo { name: string; score: number; tier: string; successful_deliveries: number; spam_violations: number; }
 interface MeshInfo { connected_peers: number; queued_forwards: number; seen_packets: number; }
+interface AttachmentInfo { id: number; message_id: number; recipient: string; file_name: string; mime_type: string; file_size_bytes: number; sha256_hash: string; }
 
 const PROTOCOLS = ['Signal', 'Matrix', 'Discord', 'Simplex', 'Tox', 'iMessage', 'SMS', 'Nostr'];
 
@@ -157,6 +158,7 @@ export default function App() {
   const [groupChannelId, setGroupChannelId] = useState('chan_ops');
   const [daemon, setDaemon] = useState<DaemonStatus>({ url: 'ws://127.0.0.1:18765', running: false, sessions: 0, subscribed_channel: null });
   const [subChannel, setSubChannel] = useState('ops-room');
+  const [attachments, setAttachments] = useState<AttachmentInfo[]>([]);
   const [importPayload, setImportPayload] = useState('');
   const [prekeyRemaining, setPrekeyRemaining] = useState<number | null>(null);
   const [showTrayMenu, setShowTrayMenu] = useState(false);
@@ -187,6 +189,7 @@ export default function App() {
       invoke('get_daemon_status').then((res) => setDaemon(res as DaemonStatus)).catch(console.error);
       invoke('get_reputations').then((res) => setReputations(res as PeerTrustInfo[])).catch(console.error);
       invoke('get_calls').then((res) => setCalls(res as CallInfo[])).catch(console.error);
+      invoke('get_attachments').then((res) => setAttachments(res as AttachmentInfo[])).catch(console.error);
     }).catch((e) => setEngineStatus(`Engine error: ${e}`));
     invoke('get_system_metrics').then((r) => setMetrics(r as SystemMetrics)).catch(console.error);
     invoke('get_contacts').then((r) => { const l = r as ContactInfo[]; if (l.length) { setContacts(l); setSelectedContact(l[0]); } }).catch(console.error);
@@ -438,9 +441,10 @@ export default function App() {
               <label className="flex items-center gap-1.5"><span className="text-slate-400 font-semibold text-[10px] uppercase tracking-wide">Fallback</span><select value={fallbackProtocol} onChange={(e) => setFallbackProtocol(e.target.value)} className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-sky-300" title="Automatic fallback if the primary network times out or rejects delivery.">{PROTOCOLS.map((p) => <option key={p} value={p}>{p}</option>)}</select></label>
               <label className="flex items-center gap-1.5 ml-auto"><span className="text-slate-400 font-semibold text-[10px] uppercase tracking-wide">Routing profile</span><select value={activeProfile} onChange={(e) => handleProfileChange(e.target.value)} className="bg-slate-800 border border-slate-700 rounded px-2 py-1" title="How aggressively OmniCore retries, races, and cascades across networks. Full profile list and explanations are in the Routing panel (right rail).">{profiles.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}</select> <Tip text="Profiles map to MultipathRouter strategies in omnicore-engine/src/router.rs. Optimal cascade is the safe default; hedged racing trades bandwidth for speed; confirmed receipt waits for signed acknowledgements." /></label>
             </div>
+            {attachments.filter((a) => a.recipient === selectedContact.name).length > 0 && <div className="flex flex-wrap gap-1.5 mb-2">{attachments.filter((a) => a.recipient === selectedContact.name).slice(0, 6).map((a) => <span key={`${a.id}-${a.file_name}`} className="text-[10px] px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300" title={`SHA-256 ${a.sha256_hash} · ${a.mime_type}`}>{a.file_name} · {a.file_size_bytes}B</span>)}</div>}
             <form onSubmit={handleSendMessage} className="flex items-center gap-2">
               <input type="text" placeholder={`Message ${selectedContact.name} via ${primaryProtocol}…`} aria-label={`Message ${selectedContact.name}`} value={inputText} onChange={(e) => setInputText(e.target.value)} className="flex-1 bg-slate-950 border border-slate-700 rounded-lg p-3 text-sm placeholder-slate-500 focus:outline-none focus:border-sky-600" />
-              <button type="button" onClick={() => setNotice('Attachments: engine stores files in the SQLCipher attachments table; pick a file in the desktop app build.')} className="px-3 py-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-xs" title="Attach a file. Attachments are encrypted at rest (attachments table) and fragmented automatically for small-MTU networks like SMS.">Attach</button>
+              <label className="px-3 py-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-xs cursor-pointer" title="Attach a file (max 2 MiB). The file is SHA-256 hashed and recorded in the encrypted SQLCipher attachments table linked to this conversation; an attachment label appears in the thread. Bridges are text transports, so the metadata + hash are the durable record.">Attach<input type="file" className="hidden" aria-label="Attach a file" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (!f) return; if (!isTauri) { setNotice('Attach (preview): launch the desktop app to record a real attachment.'); return; } f.arrayBuffer().then((buf) => invoke('attach_file', { recipientName: selectedContact.name, fileName: f.name, mimeType: f.type || 'application/octet-stream', data: Array.from(new Uint8Array(buf)) }).then((r) => { const a = r as AttachmentInfo; setNotice(`Attachment ${a.file_name} (${a.file_size_bytes} bytes) recorded for ${a.recipient}.`); invoke('get_messages').then((m) => setMessages(m as MessageItem[])).catch(console.error); invoke('get_attachments').then((x) => setAttachments(x as AttachmentInfo[])).catch(console.error); invoke('get_activity_log').then((x) => setActivity(x as ActivityEvent[])).catch(console.error); }).catch((err) => setNotice(`Attach failed: ${err}`))).catch((err) => setNotice(`Could not read file: ${err}`)); }} /></label>
               <button type="submit" className="px-6 py-3 bg-sky-700 hover:bg-sky-600 rounded-lg font-semibold text-sm">Send</button>
             </form>
           </div>

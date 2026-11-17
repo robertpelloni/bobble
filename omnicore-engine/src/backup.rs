@@ -58,7 +58,9 @@ fn chunk_nonce(derived_key: &[u8; 32], index: usize, created_at: u64) -> [u8; 12
     nonce
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+/// SHA-256 hex digest. Public so other layers (e.g. attachment records)
+/// hash bytes with the same implementation instead of duplicating it.
+pub fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     hasher.finalize().iter().map(|b| format!("{:02x}", b)).collect()

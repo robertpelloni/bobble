@@ -1,10 +1,10 @@
-# OmniCore User Manual (v1.18.0)
+# OmniCore User Manual (v1.19.0)
 
 One page. Everything is on it — there are no other dashboard pages to find.
 
 ## The page, in order of value
 
-1. **Conversation (center)** — Pick a person on the left, type, **Send**. The label above the input shows `Send via` (primary network), `Fallback` (automatic backup network), and the active **Routing profile**. A network tag on each message shows what actually carried it, including the profile that delivered it; failed sends are queued in the offline outbox instead of being lost.
+1. **Conversation (center)** — Pick a person on the left, type, **Send**. The label above the input shows `Send via` (primary network), `Fallback` (automatic backup network), and the active **Routing profile**. A network tag on each message shows what actually carried it, including the profile that delivered it; failed sends are queued in the offline outbox instead of being lost. **Attach** records a file (up to 2 MiB) into the encrypted attachments store with its SHA-256 hash, linked to the conversation and restored on launch; attached files appear as chips above the composer.
 2. **People (left)** — One card per person across all their networks (Signal, Matrix, Discord, Simplex, Tox, iMessage, SMS, Nostr), with a **Trust** badge (Neutral/Vetted/Trusted/Untrusted/Blacklisted + score; successful deliveries build trust). Search by name or network. **+ Person** creates a unified contact — choose the primary network (tried first) and fallback (tried automatically on timeout/failure).
 3. **Bridges (right, top)** — One row per network connection with live status, latency, and fallback priority (lower tries earlier). **Connect/Disconnect** toggles a bridge; **Probe all** runs real heartbeat probes against degraded circuits and reports recoveries; **Diagnose** evaluates accumulated routing metrics (attempts, latency, circuit state, anomalies such as latency spikes or never-attempted bridges). Routing metrics persist across sends for the life of the app.
 4. **Routing (right, middle)** — Choose how delivery behaves: *Optimal cascade* (default, health+latency ordered), *Hedged racing* (parallel, fastest wins), *Confirmed receipt* (waits for signed acknowledgement), *Exact-once*, *Canary drop detection*, *Percentile bounded*, *Bandwidth throttled*, *Cost & QoS*, *Penalty weighted*, *Adaptive retry*. The selected profile genuinely executes on every send, and your choice is remembered across restarts.
