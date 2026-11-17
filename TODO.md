@@ -92,4 +92,5 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Interactive pre-key bundles in the Security panel (v1.18.0: generate ephemeral PreKeyBundle, consume one-time prekeys singly, exhaustion errors).
 - [x] Sign IdentityCard display_name (v1.18.0 security fix: re-labeled cards now fail verification).
 - [x] Real attachments in the composer (v1.19.0: file picker, SHA-256, SQLCipher attachments row linked to a message, restore on launch; 2 MiB IPC limit).
+- [x] Live LAN peer discovery (v1.20.0: UDP 47654 beacon broadcast + listen, PeerDiscovery cache, heard peers listed in Groups/mesh; native BT/Wi-Fi drivers still pending below).
 

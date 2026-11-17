@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 1.20.0:
+  - LAN peer discovery is live: Discover LAN peers in Groups, mesh & calls broadcasts an OmniCore beacon on UDP 47654 and listens for peer beacons, caching valid peers in PeerDiscovery (own beacon and malformed packets ignored; results cumulate across scans). Heard peers show unified ID, address, and protocols. Beacons are unauthenticated LAN announcements, and the UI says pairing still requires a signed identity card. Covered by test_discover_lan_peers_finds_beacon_and_ignores_garbage (real UDP beacon heard, garbage dropped, self excluded). CI for v1.19.0 (run 44035648415) verified terminal green.
 - 1.19.0:
   - Attachments are real: the composer Attach button opens a file picker (max 2 MiB through IPC), hashes the bytes with SHA-256, writes a message row plus an attachments row to SQLCipher (Database::insert_attachment, new Database::list_recent_attachments), shows an attachment label in the thread and file chips above the composer, and restores attachment history on launch. backup::sha256_hex is now public so hashing is not duplicated. Covered by test_attach_file_records_and_restores (DB row, hash, restore, and empty/oversize/unknown-recipient rejection) plus the extended engine attachment test. Bridges remain text transports, so metadata + hash are the durable record and the UI says so.
   - CI for v1.18.1 (run 44034095641) verified terminal green on all non-gated jobs.

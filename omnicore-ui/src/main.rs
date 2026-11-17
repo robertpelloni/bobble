@@ -158,6 +158,15 @@ pub mod state {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct DiscoveredPeerInfo {
+        pub client_id: String,
+        pub unified_id: String,
+        pub address: String,
+        pub supported_protocols: Vec<String>,
+        pub last_seen: u64,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct AttachmentInfo {
         pub id: i64,
         pub message_id: i64,
@@ -254,6 +263,8 @@ pub mod state {
         pub prekey_bundle: Mutex<Option<omnicore_engine::ratchet::PreKeyBundle>>,
         // Attachments recorded this session + restored from SQLCipher.
         pub attachments: Mutex<Vec<AttachmentInfo>>,
+        // LAN peer discovery (UDP beacons) for serverless local sync.
+        pub discovery: Mutex<omnicore_engine::discovery::PeerDiscovery>,
     }
 
     impl Default for AppState {
@@ -442,6 +453,7 @@ pub mod state {
                 mesh: Mutex::new(omnicore_engine::mesh::MeshTransportDaemon::new("local_user")),
             prekey_bundle: Mutex::new(None),
             attachments: Mutex::new(Vec::new()),
+            discovery: Mutex::new(omnicore_engine::discovery::PeerDiscovery::new(crate::DISCOVERY_PORT, "omnicore_desktop", "local_user")),
             }
         }
     }
@@ -463,6 +475,8 @@ fn greet(name: &str) -> String {
 }
 
 pub const DESKTOP_SESSION_ID: &str = "desktop_main";
+/// UDP port for LAN peer-discovery beacons (PeerDiscovery).
+pub const DISCOVERY_PORT: u16 = 47654;
 
 /// Formats epoch seconds as "YYYY-MM-DD HH:MM UTC" without a date crate
 /// (Howard Hinnant's civil-from-days algorithm). Restored DB rows store raw
@@ -798,6 +812,69 @@ fn attach_file(state: State<'_, AppState>, recipient_name: String, file_name: St
 #[tauri::command]
 fn get_attachments(state: State<'_, AppState>) -> Vec<AttachmentInfo> {
     state.attachments.lock().unwrap().clone()
+}
+
+/// One LAN discovery scan: broadcast our beacon on the discovery port and
+/// listen briefly for peer beacons, caching valid peers in PeerDiscovery.
+/// Beacons are unauthenticated LAN announcements (like mDNS), so results
+/// are "heard on the local network", not verified identities — pairing
+/// still goes through signed identity cards. Our own beacon and malformed
+/// packets are ignored. Returns every cached peer (scan + earlier scans).
+fn discover_lan_peers_inner(state: &AppState) -> Result<Vec<DiscoveredPeerInfo>, String> {
+    let (port, beacon_bytes) = {
+        let discovery = state.discovery.lock().unwrap();
+        let beacon = discovery.create_beacon(18765, vec!["Signal".to_string(), "Matrix".to_string(), "Simplex".to_string()]);
+        (discovery.broadcast_port, beacon.to_bytes().map_err(|e| e.to_string())?)
+    };
+    let socket = std::net::UdpSocket::bind(("0.0.0.0", port)).map_err(|e| format!("Discovery bind on UDP {} failed: {}", port, e))?;
+    socket.set_broadcast(true).map_err(|e| e.to_string())?;
+    socket.set_read_timeout(Some(std::time::Duration::from_millis(200))).map_err(|e| e.to_string())?;
+    // Announce ourselves; failure to broadcast (e.g. no LAN) must not fail
+    // the scan — peers can still be heard via unicast/other broadcasts.
+    let _ = socket.send_to(&beacon_bytes, ("255.255.255.255", port));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1200);
+    let mut buf = [0u8; 4096];
+    loop {
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        match socket.recv_from(&mut buf) {
+            Ok((len, addr)) => {
+                let mut discovery = state.discovery.lock().unwrap();
+                if let Ok(peer) = discovery.parse_peer(&buf[..len], addr) {
+                    if peer.unified_id != discovery.unified_id && peer.client_id != discovery.client_id {
+                        discovery.cache_peer(peer);
+                    }
+                }
+                // Malformed packets are ignored by design (parse_peer Err).
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => continue,
+            Err(e) => return Err(format!("Discovery listen failed: {}", e)),
+        }
+    }
+    let peers = discovered_peer_infos(state);
+    push_activity(state, "LAN_DISCOVERY", format!("LAN discovery scan on UDP {} heard {} peer(s)", port, peers.len()));
+    Ok(peers)
+}
+
+fn discovered_peer_infos(state: &AppState) -> Vec<DiscoveredPeerInfo> {
+    let discovery = state.discovery.lock().unwrap();
+    let mut peers: Vec<DiscoveredPeerInfo> = discovery.get_cached_peers().into_iter().map(|p| DiscoveredPeerInfo {
+        client_id: p.client_id, unified_id: p.unified_id, address: p.socket_addr.to_string(),
+        supported_protocols: p.supported_protocols, last_seen: p.last_seen,
+    }).collect();
+    peers.sort_by(|a, b| a.unified_id.cmp(&b.unified_id));
+    peers
+}
+
+#[tauri::command]
+fn discover_lan_peers(state: State<'_, AppState>) -> Result<Vec<DiscoveredPeerInfo>, String> {
+    discover_lan_peers_inner(&state)
+}
+
+#[tauri::command]
+fn get_discovered_peers(state: State<'_, AppState>) -> Vec<DiscoveredPeerInfo> {
+    discovered_peer_infos(&state)
 }
 
 #[tauri::command]
@@ -1475,7 +1552,7 @@ async fn get_network_status(state: State<'_, AppState>) -> Result<NetworkStatus,
         federation_channels: channels,
         federation_description: "Federated group channels with vector-clock causal sync + delivery ledger".to_string(),
         mesh_peers: state.mesh.lock().unwrap().connected_channel_count(), mesh_description: "BLE / Wi-Fi Direct store-and-forward mesh (MeshTransportDaemon). Attach peers in Groups, mesh & calls; native HCI/JNI drivers still pending.".to_string(),
-        discovery_description: "LAN UDP beacon discovery with cached peers (PeerDiscovery)".to_string(),
+        discovery_description: format!("LAN UDP beacon discovery (PeerDiscovery, UDP {}): {} peer(s) heard. Run a scan from Groups, mesh & calls.", DISCOVERY_PORT, state.discovery.lock().unwrap().cached_peer_count()),
         active_calls, call_description: "WebRTC / Matrix VoIP / Discord voice gateway; jitter buffer + simulcast ready. Start a call from Groups, mesh & calls.".to_string(),
         outbox_queued, outbox_description: "Offline outbox: failed sends queue here; Retry re-runs the active profile with exponential backoff, max 5 attempts (OutboxManager)".to_string(),
         telemetry_summary: format!("CPU {:.0}°C · RAM {} / {} MB · Disk {:.1} GB free · Battery {}%", telemetry.health.cpu_temp_celsius, telemetry.health.memory_used_mb, telemetry.health.memory_total_mb, telemetry.health.disk_free_gb, telemetry.battery.as_ref().map(|b| b.percentage).unwrap_or(0)),
@@ -1884,6 +1961,8 @@ fn main() {
             send_message,
             attach_file,
             get_attachments,
+            discover_lan_peers,
+            get_discovered_peers,
             get_bridges,
             toggle_bridge,
             toggle_servers,
@@ -2301,6 +2380,29 @@ mod tests {
         assert_eq!(restored[0].file_name, "notes.txt");
         drop(restored);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_discover_lan_peers_finds_beacon_and_ignores_garbage() {
+        let state = AppState::default();
+        let port = 47991u16;
+        state.discovery.lock().unwrap().broadcast_port = port;
+        // A "peer" announces itself over UDP shortly after the scan starts.
+        let sender = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            let sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+            let beacon = omnicore_engine::discovery::PeerAnnouncement::new("other_dev", "peer_unified", 18765, vec!["Signal".to_string(), "Matrix".to_string()]);
+            sock.send_to(&beacon.to_bytes().unwrap(), format!("127.0.0.1:{}", port)).unwrap();
+            sock.send_to(b"not a beacon", format!("127.0.0.1:{}", port)).unwrap();
+        });
+        let peers = crate::discover_lan_peers_inner(&state).expect("discovery scan should succeed");
+        sender.join().unwrap();
+        assert_eq!(peers.len(), 1, "exactly the valid peer beacon is kept: {:?}", peers.iter().map(|p| &p.unified_id).collect::<Vec<_>>());
+        assert_eq!(peers[0].unified_id, "peer_unified");
+        assert_eq!(peers[0].supported_protocols, vec!["Signal".to_string(), "Matrix".to_string()]);
+        assert_eq!(state.discovery.lock().unwrap().cached_peer_count(), 1);
+        // Our own beacon must never be reported as a peer.
+        assert!(peers.iter().all(|p| p.unified_id != "local_user"));
     }
 
     #[test]

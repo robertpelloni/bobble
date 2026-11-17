@@ -30,6 +30,7 @@ interface CallInfo { route_id: string; contact_name: string; source_protocol: st
 interface PeerTrustInfo { name: string; score: number; tier: string; successful_deliveries: number; spam_violations: number; }
 interface MeshInfo { connected_peers: number; queued_forwards: number; seen_packets: number; }
 interface AttachmentInfo { id: number; message_id: number; recipient: string; file_name: string; mime_type: string; file_size_bytes: number; sha256_hash: string; }
+interface DiscoveredPeerInfo { client_id: string; unified_id: string; address: string; supported_protocols: string[]; last_seen: number; }
 
 const PROTOCOLS = ['Signal', 'Matrix', 'Discord', 'Simplex', 'Tox', 'iMessage', 'SMS', 'Nostr'];
 
@@ -159,6 +160,7 @@ export default function App() {
   const [daemon, setDaemon] = useState<DaemonStatus>({ url: 'ws://127.0.0.1:18765', running: false, sessions: 0, subscribed_channel: null });
   const [subChannel, setSubChannel] = useState('ops-room');
   const [attachments, setAttachments] = useState<AttachmentInfo[]>([]);
+  const [discoveredPeers, setDiscoveredPeers] = useState<DiscoveredPeerInfo[]>([]);
   const [importPayload, setImportPayload] = useState('');
   const [prekeyRemaining, setPrekeyRemaining] = useState<number | null>(null);
   const [showTrayMenu, setShowTrayMenu] = useState(false);
@@ -190,6 +192,7 @@ export default function App() {
       invoke('get_reputations').then((res) => setReputations(res as PeerTrustInfo[])).catch(console.error);
       invoke('get_calls').then((res) => setCalls(res as CallInfo[])).catch(console.error);
       invoke('get_attachments').then((res) => setAttachments(res as AttachmentInfo[])).catch(console.error);
+      invoke('get_discovered_peers').then((res) => setDiscoveredPeers(res as DiscoveredPeerInfo[])).catch(console.error);
     }).catch((e) => setEngineStatus(`Engine error: ${e}`));
     invoke('get_system_metrics').then((r) => setMetrics(r as SystemMetrics)).catch(console.error);
     invoke('get_contacts').then((r) => { const l = r as ContactInfo[]; if (l.length) { setContacts(l); setSelectedContact(l[0]); } }).catch(console.error);
@@ -537,6 +540,11 @@ export default function App() {
                 <select value={meshTransport} onChange={(e) => setMeshTransport(e.target.value)} aria-label="Mesh transport" className="bg-slate-950 border border-slate-700 rounded px-1.5 py-1" title="Physical mesh transport for this peer channel (MeshTransportDaemon). Native BLE/Wi-Fi drivers are still pending, so this attaches the daemon channel that hardware will bind to."><option>BLE</option><option>WiFi Direct</option><option>UDP Broadcast</option></select>
                 <button type="button" onClick={() => { if (!meshPeerId.trim()) { setNotice('Enter a mesh peer ID first.'); return; } if (isTauri) invoke('attach_mesh_peer', { peerId: meshPeerId, transport: meshTransport }).then((r) => { setMesh(r as MeshInfo); setMeshPeerId(''); invoke('get_activity_log').then((a) => setActivity(a as ActivityEvent[])).catch(console.error); }).catch((e) => setNotice(`Attach mesh peer failed: ${e}`)); else { setMesh((p) => ({ ...p, connected_peers: p.connected_peers + 1 })); logLocal('MESH_PEER_ATTACHED', `Mesh peer '${meshPeerId}' attached via ${meshTransport} (preview)`); setMeshPeerId(''); } }} className="px-2 py-1 bg-slate-800 border border-slate-700 rounded font-semibold" title="Attach a peer channel to the local mesh transport daemon (MeshTransportDaemon::attach_channel).">Attach peer</button>
               </div>
+              <div className="flex items-center gap-1.5 text-[11px]">
+                <button type="button" onClick={() => { if (isTauri) invoke('discover_lan_peers').then((r) => { const peers = r as DiscoveredPeerInfo[]; setDiscoveredPeers(peers); setNotice(peers.length ? `LAN discovery heard ${peers.length} peer(s): ${peers.map((p) => p.unified_id).join(', ')}` : 'LAN discovery complete: no peers heard on this network yet.'); invoke('get_activity_log').then((a) => setActivity(a as ActivityEvent[])).catch(console.error); }).catch((e) => setNotice(`Discovery failed: ${e}`)); else setNotice('Discovery (preview): launch the desktop app to scan the LAN.'); }} className="px-2 py-1 bg-slate-800 border border-slate-700 rounded font-semibold" title="Broadcast an OmniCore beacon on UDP 47654 and listen for peer beacons (PeerDiscovery). Beacons are unauthenticated LAN announcements; identity pairing still requires a signed identity card.">Discover LAN peers</button>
+                <span className="text-slate-500">{discoveredPeers.length} heard <Tip text="Peers heard via UDP beacons on this local network. Hearing a beacon only proves a device announced itself; verify people through Security & privacy identity cards before trusting them." /></span>
+              </div>
+              {discoveredPeers.map((p) => <p key={p.unified_id} className="text-[11px] text-slate-400 leading-snug"><strong className="text-slate-300">{p.unified_id}</strong> · {p.address} · {p.supported_protocols.join(', ')}</p>)}
               <p className="text-[11px] text-slate-400 leading-snug"><strong className="text-slate-300">Calls:</strong> {network.call_description} Active calls: {network.active_calls}.</p>
               <div className="flex gap-1.5 text-[11px]">
                 <button type="button" onClick={handleStartCall} className="px-2 py-1 bg-sky-700 hover:bg-sky-600 rounded font-semibold" title={`Start an audio/video call to the selected person (${selectedContact.name}), bridging ${primaryProtocol} to ${fallbackProtocol} through the cross-protocol call gateway with SDP offer/answer negotiation.`}>Call {selectedContact.name.split(' ')[0]} ({primaryProtocol} → {fallbackProtocol})</button>
