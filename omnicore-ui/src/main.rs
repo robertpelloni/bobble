@@ -158,6 +158,23 @@ pub mod state {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct ImportedIdentity {
+        pub display_name: String,
+        pub unified_id: String,
+        pub fingerprint: String,
+        pub verified: bool,
+        pub mapped_protocols: Vec<String>,
+        pub added_as_contact: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct PrekeyBundleInfo {
+        pub identity_key: String,
+        pub signed_prekey: String,
+        pub one_time_prekeys_remaining: usize,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct DaemonStatus {
         pub url: String,
         pub running: bool,
@@ -221,6 +238,9 @@ pub mod state {
         pub reputation: Mutex<omnicore_engine::reputation::ReputationEngine>,
         // Local mesh transport daemon (BLE / Wi-Fi Direct channels).
         pub mesh: Mutex<omnicore_engine::mesh::MeshTransportDaemon>,
+        // Published pre-key bundle for offline-first encrypted handshakes;
+        // one-time keys are consumed singly and never reused.
+        pub prekey_bundle: Mutex<Option<omnicore_engine::ratchet::PreKeyBundle>>,
     }
 
     impl Default for AppState {
@@ -407,6 +427,7 @@ pub mod state {
                 call_routes: Mutex::new(Vec::new()),
                 reputation: Mutex::new(omnicore_engine::reputation::ReputationEngine::new(omnicore_engine::reputation::SpamHeuristicFilter::default())),
                 mesh: Mutex::new(omnicore_engine::mesh::MeshTransportDaemon::new("local_user")),
+            prekey_bundle: Mutex::new(None),
             }
         }
     }
@@ -1223,6 +1244,117 @@ fn get_identity_qr() -> Result<String, String> {
     local_identity_card().to_qr_payload().map_err(|e| e.to_string())
 }
 
+/// Imports a peer identity card from a QR payload (`omnicore://identity?…`)
+/// or raw exported JSON. The engine verifies the card signature before we
+/// trust it; a verified card becomes a contact (deduped by unified_id) so
+/// pairing actually populates the People list instead of only exporting.
+/// Tampered or malformed payloads fail closed with an error, never a contact.
+fn import_identity_card_inner(state: &AppState, payload: &str) -> Result<ImportedIdentity, String> {
+    let trimmed = payload.trim();
+    if trimmed.is_empty() {
+        return Err("Identity payload is empty".to_string());
+    }
+    let card = if trimmed.starts_with("omnicore://identity") {
+        omnicore_engine::identity::IdentityCard::from_qr_payload(trimmed).map_err(|e| e.to_string())?
+    } else {
+        let parsed = omnicore_engine::identity::IdentityCard::import_json(trimmed).map_err(|e| e.to_string())?;
+        // import_json only parses; pairing must not trust an unsigned card.
+        if !parsed.verify_signature() {
+            return Err("Identity card failed cryptographic verification".to_string());
+        }
+        parsed
+    };
+    let mut mapped_protocols: Vec<String> = card.platform_mappings.keys().cloned().collect();
+    mapped_protocols.sort();
+    // Add as a contact once; re-importing the same card is a no-op so a
+    // user can safely re-scan without duplicating People entries.
+    let added = {
+        let mut contacts = state.contacts.lock().unwrap();
+        if contacts.iter().any(|c| c.unified_id == card.unified_id) {
+            false
+        } else {
+            let primary = mapped_protocols.first().cloned().unwrap_or_else(|| "Signal".to_string());
+            let fallback = mapped_protocols.iter().find(|p| **p != primary).cloned().unwrap_or_else(|| "Matrix".to_string());
+            let mapped = if mapped_protocols.is_empty() { vec![primary.clone(), fallback.clone()] } else { mapped_protocols.clone() };
+            // Persist first when the DB is open, mirroring add_contact.
+            {
+                let db_guard = state.db.lock().unwrap();
+                if let Some(db) = db_guard.as_ref() {
+                    let primary_kind = omnicore_engine::models::ProtocolKind::from_str_name(&primary).unwrap_or(omnicore_engine::models::ProtocolKind::Signal);
+                    let fallbacks: Vec<omnicore_engine::models::ProtocolKind> = mapped.iter().filter_map(|p| omnicore_engine::models::ProtocolKind::from_str_name(p)).filter(|p| *p != primary_kind).collect();
+                    if let Err(e) = db.insert_contact(&card.display_name, &card.unified_id, primary_kind, &fallbacks) {
+                        push_activity(state, "DB_PERSIST_ERROR", format!("Failed to persist imported contact {}: {}", card.display_name, e));
+                    }
+                }
+            }
+            let initials = contact_initials(&card.display_name);
+            let next_id = (contacts.len() + 1) as i64;
+            contacts.push(ContactInfo {
+                id: next_id,
+                name: card.display_name.clone(),
+                unified_id: card.unified_id.clone(),
+                primary_protocol: primary,
+                fallback_protocol: fallback,
+                avatar_initials: if initials.is_empty() { "U".to_string() } else { initials },
+                status: "Online".to_string(),
+                mapped_protocols: mapped,
+            });
+            true
+        }
+    };
+    push_activity(state, "IDENTITY_IMPORTED", format!("Imported verified identity {} ({}){}", card.display_name, card.unified_id, if added { " as a new contact" } else { " (already a contact)" }));
+    Ok(ImportedIdentity {
+        display_name: card.display_name.clone(),
+        unified_id: card.unified_id.clone(),
+        fingerprint: card.fingerprint.formatted_fingerprint.clone(),
+        verified: true,
+        mapped_protocols,
+        added_as_contact: added,
+    })
+}
+
+#[tauri::command]
+fn import_identity_card(state: State<'_, AppState>, payload: String) -> Result<ImportedIdentity, String> {
+    import_identity_card_inner(&state, &payload)
+}
+
+/// Generates a fresh ephemeral pre-key bundle for the local identity so
+/// peers can start forward-secret sessions while this device is offline.
+fn generate_prekey_bundle_inner(state: &AppState, count: usize) -> Result<PrekeyBundleInfo, String> {
+    if count == 0 || count > 100 {
+        return Err("Pre-key count must be between 1 and 100".to_string());
+    }
+    let bundle = omnicore_engine::ratchet::PreKeyBundle::generate_ephemeral_bundle("local_user", count);
+    let info = PrekeyBundleInfo {
+        identity_key: bundle.identity_key.clone(),
+        signed_prekey: bundle.signed_prekey.clone(),
+        one_time_prekeys_remaining: bundle.one_time_prekeys.len(),
+    };
+    *state.prekey_bundle.lock().unwrap() = Some(bundle);
+    push_activity(state, "PREKEY_BUNDLE_GENERATED", format!("Generated pre-key bundle with {} one-time prekeys", info.one_time_prekeys_remaining));
+    Ok(info)
+}
+
+/// Consumes exactly one one-time prekey. Exhaustion is an error so callers
+/// regenerate a bundle instead of silently reusing key material.
+fn consume_prekey_inner(state: &AppState) -> Result<String, String> {
+    let mut guard = state.prekey_bundle.lock().unwrap();
+    let bundle = guard.as_mut().ok_or_else(|| "No pre-key bundle generated yet".to_string())?;
+    bundle.consume_one_time_key().ok_or_else(|| "Pre-key bundle exhausted; generate a new bundle".to_string())
+}
+
+#[tauri::command]
+fn generate_prekey_bundle(state: State<'_, AppState>, count: usize) -> Result<PrekeyBundleInfo, String> {
+    generate_prekey_bundle_inner(&state, count)
+}
+
+#[tauri::command]
+fn consume_prekey(state: State<'_, AppState>) -> Result<String, String> {
+    let key = consume_prekey_inner(&state)?;
+    push_activity(&state, "PREKEY_CONSUMED", format!("Consumed one-time prekey {}", key));
+    Ok(key)
+}
+
 #[tauri::command]
 fn export_identity_card() -> Result<String, String> {
     use std::collections::HashMap;
@@ -1660,6 +1792,9 @@ fn main() {
             get_security_status,
             toggle_tor,
             export_identity_card,
+            import_identity_card,
+            generate_prekey_bundle,
+            consume_prekey,
             create_backup,
             verify_backup,
             get_identity_qr,
@@ -1984,6 +2119,51 @@ mod tests {
         // Channel-targeted event reaches the subscriber; other channels do not.
         assert_eq!(daemon.broadcast_event("message_dispatched", serde_json::json!({}), Some("ops-room")).await, 1);
         assert_eq!(daemon.broadcast_event("message_dispatched", serde_json::json!({}), Some("other")).await, 0);
+    }
+
+    #[test]
+    fn test_import_identity_card_qr_json_and_tamper() {
+        use std::collections::HashMap;
+        let state = AppState::default();
+        let before = state.contacts.lock().unwrap().len();
+        let mut mappings = HashMap::new();
+        mappings.insert(omnicore_engine::models::ProtocolKind::Matrix, "@eve:matrix.org".to_string());
+        let card = omnicore_engine::identity::IdentityCard::new("eve_unified", "Eve Pairing", "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890", mappings);
+        // QR payload imports, verifies, and adds exactly one contact.
+        let qr = card.to_qr_payload().unwrap();
+        let imported = crate::import_identity_card_inner(&state, &qr).expect("QR import should succeed");
+        assert_eq!(imported.unified_id, "eve_unified");
+        assert!(imported.verified);
+        assert_eq!(state.contacts.lock().unwrap().len(), before + 1);
+        // Re-import dedupes by unified_id.
+        let again = crate::import_identity_card_inner(&state, &qr).expect("re-import should succeed");
+        assert_eq!(again.unified_id, "eve_unified");
+        assert_eq!(state.contacts.lock().unwrap().len(), before + 1);
+        // Raw JSON export imports too.
+        let card2 = omnicore_engine::identity::IdentityCard::new("frank_unified", "Frank Pairing", "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef", HashMap::new());
+        let json = card2.export_json().unwrap();
+        assert!(crate::import_identity_card_inner(&state, &json).is_ok());
+        // Tampered JSON (name changed after signing) and garbage fail closed.
+        let tampered = json.replace("Frank Pairing", "Mallory Forged");
+        assert!(crate::import_identity_card_inner(&state, &tampered).is_err());
+        assert!(crate::import_identity_card_inner(&state, "not a card").is_err());
+        assert!(crate::import_identity_card_inner(&state, "omnicore://identity?data=zz").is_err());
+    }
+
+    #[test]
+    fn test_prekey_bundle_generate_and_consume() {
+        let state = AppState::default();
+        // Consuming before generating is an explicit error, not a fake key.
+        assert!(crate::consume_prekey_inner(&state).is_err());
+        let info = crate::generate_prekey_bundle_inner(&state, 3).expect("bundle generation should succeed");
+        assert_eq!(info.one_time_prekeys_remaining, 3);
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..3 {
+            let key = crate::consume_prekey_inner(&state).expect("prekey should be available");
+            assert!(seen.insert(key), "one-time prekeys must be distinct");
+        }
+        assert!(crate::consume_prekey_inner(&state).is_err(), "exhausted bundle must error");
+        assert!(crate::generate_prekey_bundle_inner(&state, 0).is_err(), "empty bundle must be rejected");
     }
 
     #[test]

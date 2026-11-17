@@ -88,4 +88,7 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [ ] Live-network credentialled delivery proof (needs user: Matrix homeserver / signald / Discord token + host choice).
 - [ ] Human tray click-through check on Windows (left-click show, Pause workers, Quit servers only) while the app runs.
 - [x] Expo 58 / React Native 0.88 migration (shipped in v1.17.0; dependabot PR #5 superseded, no longer open).
+- [x] Identity card import + pairing in the Security panel (v1.18.0: QR/JSON import verifies the signature, adds the peer to People deduped by unified_id, tampered cards rejected).
+- [x] Interactive pre-key bundles in the Security panel (v1.18.0: generate ephemeral PreKeyBundle, consume one-time prekeys singly, exhaustion errors).
+- [x] Sign IdentityCard display_name (v1.18.0 security fix: re-labeled cards now fail verification).
 

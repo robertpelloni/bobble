@@ -2,6 +2,9 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 1.18.0:
+  - Identity pairing is now bidirectional: the Security panel imports a peer identity QR payload or exported JSON (import_identity_card), verifies the card signature in the engine, and adds the peer to People once (deduped by unified_id, persisted to SQLCipher when open). Pre-key bundles are interactive too: Generate pre-keys (10) publishes an ephemeral PreKeyBundle and Consume one spends exactly one one-time prekey, erroring when exhausted. Covered by test_import_identity_card_qr_json_and_tamper and test_prekey_bundle_generate_and_consume.
+  - Security fix found by that test: IdentityCard signatures did not cover the display name, so a captured card could be re-labeled with any name and still verify. The signed payload now includes display_name in IdentityCard::new and verify_signature (test_identity_card_display_name_is_signed). Also synced stale mobile app.json version (was 1.0.4).
 - 1.17.1:
   - Fixed release packaging: plain cargo build keeps the Tauri dev cfg, so the 'release' binary loaded devUrl (localhost:1420) and was blank without a dev server (found by standalone smoke test). Release builds now use the Tauri CLI (@tauri-apps/cli, tauri build --no-bundle) in scripts/bundle.sh and the CI release-bundle job. Verified: standalone release exe serves http://tauri.localhost/, binds the daemon on 18765, and an external WebSocket client got a routed 'Message delivered via Signal'.
 - 1.17.0:

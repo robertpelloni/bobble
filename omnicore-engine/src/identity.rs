@@ -60,8 +60,10 @@ impl IdentityCard {
 
         let fingerprint = IdentityFingerprint::new(public_key_hex);
 
-        // Deterministic mock signature for decentralized card verification
-        let signature_payload = format!("{}:{}:{}", unified_id, public_key_hex, issued_at);
+        // Deterministic mock signature for decentralized card verification.
+        // The display name is signed too: without it, anyone could re-label a
+        // captured card with a victim's name and pass verification.
+        let signature_payload = format!("{}:{}:{}:{}", unified_id, display_name, public_key_hex, issued_at);
         let signature_hex = format!("{:x}", md5_digest_approx(signature_payload.as_bytes()));
 
         Self {
@@ -86,7 +88,7 @@ impl IdentityCard {
     }
 
     pub fn verify_signature(&self) -> bool {
-        let expected_payload = format!("{}:{}:{}", self.unified_id, self.fingerprint.public_key_hex, self.issued_at);
+        let expected_payload = format!("{}:{}:{}:{}", self.unified_id, self.display_name, self.fingerprint.public_key_hex, self.issued_at);
         let expected_sig = format!("{:x}", md5_digest_approx(expected_payload.as_bytes()));
         self.signature_hex == expected_sig
     }
@@ -193,6 +195,15 @@ mod tests {
         assert_eq!(decoded.unified_id, "bob_unified");
         assert_eq!(decoded.display_name, "Bob Smith");
         assert!(decoded.verify_signature());
+    }
+
+    #[test]
+    fn test_identity_card_display_name_is_signed() {
+        let card = IdentityCard::new("alice_unified", "Alice Montgomery", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", HashMap::new());
+        assert!(card.verify_signature());
+        let mut forged = card.clone();
+        forged.display_name = "Mallory Forged".to_string();
+        assert!(!forged.verify_signature(), "re-labeling a captured card must fail verification");
     }
 
     #[test]
