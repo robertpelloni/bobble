@@ -2,6 +2,8 @@
 
 Document every adjustment. Track a single, global version string/date/build number sourced from a single text file (like VERSION.md) rather than hardcoding it into application logic.
 
+- 1.20.1:
+  - Verified LAN discovery end-to-end in the real desktop app: launched the Tauri app at BelowNormal priority with an external UDP beacon broadcasting on 47654, clicked Discover LAN peers in the live WebView, and observed the banner plus the heard-peer row (external_peer_1, LAN address:18765, Signal/Matrix/Tox) in the Groups/mesh panel. Fix from that pass: the Engine/network discovery text was fetched at load and stayed at 0 after a scan; the Discover handler now refreshes network status. Screenshot evidence was captured during verification (not committed).
 - 1.20.0:
   - LAN peer discovery is live: Discover LAN peers in Groups, mesh & calls broadcasts an OmniCore beacon on UDP 47654 and listens for peer beacons, caching valid peers in PeerDiscovery (own beacon and malformed packets ignored; results cumulate across scans). Heard peers show unified ID, address, and protocols. Beacons are unauthenticated LAN announcements, and the UI says pairing still requires a signed identity card. Covered by test_discover_lan_peers_finds_beacon_and_ignores_garbage (real UDP beacon heard, garbage dropped, self excluded). CI for v1.19.0 (run 44035648415) verified terminal green.
 - 1.19.0:
