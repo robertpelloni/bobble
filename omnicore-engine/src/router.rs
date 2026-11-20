@@ -2715,11 +2715,11 @@ mod tests {
     async fn test_multipath_router_primary_delivery() {
         let mut registry = BridgeRegistry::new();
 
-        let mut signal = SignalBridge::new();
+        let mut signal = SignalBridge::new_mock();
         signal.initialize().await.unwrap();
         registry.register(ProtocolKind::Signal, Box::new(signal));
 
-        let mut matrix = MatrixBridge::new();
+        let mut matrix = MatrixBridge::new_mock();
         matrix.initialize().await.unwrap();
         registry.register(ProtocolKind::Matrix, Box::new(matrix));
 
@@ -2745,11 +2745,11 @@ mod tests {
         let mut registry = BridgeRegistry::new();
 
         // Register disconnected Signal bridge (will fail)
-        let signal = SignalBridge::new(); // Not initialized, will fail send
+        let signal = SignalBridge::new_mock(); // Not initialized, will fail send
         registry.register(ProtocolKind::Signal, Box::new(signal));
 
         // Register initialized SMS bridge (will succeed)
-        let mut sms = SmsBridge::new();
+        let mut sms = SmsBridge::new_mock();
         let _ = <SmsBridge as ProtocolBridge>::initialize(&mut sms).await;
         registry.register(ProtocolKind::Sms, Box::new(sms));
 
@@ -2781,15 +2781,15 @@ mod tests {
         let mut registry = BridgeRegistry::new();
 
         // 1. Primary: Uninitialized Signal bridge (fails)
-        let signal = SignalBridge::new();
+        let signal = SignalBridge::new_mock();
         registry.register(ProtocolKind::Signal, Box::new(signal));
 
         // 2. Secondary fallback: Uninitialized Matrix bridge (fails)
-        let matrix = MatrixBridge::new();
+        let matrix = MatrixBridge::new_mock();
         registry.register(ProtocolKind::Matrix, Box::new(matrix));
 
         // 3. Tertiary fallback: Initialized SMS bridge (succeeds)
-        let mut sms = SmsBridge::new();
+        let mut sms = SmsBridge::new_mock();
         let _ = <SmsBridge as ProtocolBridge>::initialize(&mut sms).await;
         registry.register(ProtocolKind::Sms, Box::new(sms));
 
@@ -2831,9 +2831,9 @@ mod tests {
         let mut registry = BridgeRegistry::new();
 
         // All bridges uninitialized -> all will fail send
-        let signal = SignalBridge::new();
+        let signal = SignalBridge::new_mock();
         registry.register(ProtocolKind::Signal, Box::new(signal));
-        let matrix = MatrixBridge::new();
+        let matrix = MatrixBridge::new_mock();
         registry.register(ProtocolKind::Matrix, Box::new(matrix));
 
         let router = MultipathRouter::new(Arc::new(RwLock::new(registry)));
@@ -2861,11 +2861,11 @@ mod tests {
 
         let mut registry = BridgeRegistry::new();
         // 1. Primary: Uninitialized Tox DHT bridge (fails)
-        let tox = ToxBridge::new();
+        let tox = ToxBridge::new_mock();
         registry.register(ProtocolKind::Tox, Box::new(tox));
 
         // 2. Fallback: Initialized Cellular SMS bridge (succeeds)
-        let mut sms = SmsBridge::new();
+        let mut sms = SmsBridge::new_mock();
         let _ = <SmsBridge as ProtocolBridge>::initialize(&mut sms).await;
         registry.register(ProtocolKind::Sms, Box::new(sms));
 
@@ -2898,11 +2898,11 @@ mod tests {
 
         let mut registry = BridgeRegistry::new();
         // 1. Primary: Uninitialized SimpleX queue bridge (fails)
-        let simplex = SimplexBridge::new();
+        let simplex = SimplexBridge::new_mock();
         registry.register(ProtocolKind::Simplex, Box::new(simplex));
 
         // 2. Fallback: Initialized Matrix bridge (succeeds)
-        let mut matrix = MatrixBridge::new();
+        let mut matrix = MatrixBridge::new_mock();
         matrix.initialize().await.unwrap();
         registry.register(ProtocolKind::Matrix, Box::new(matrix));
 
@@ -2932,9 +2932,9 @@ mod tests {
     #[test]
     fn test_adaptive_latency_route_selection() {
         let mut registry = BridgeRegistry::new();
-        registry.register(ProtocolKind::Signal, Box::new(crate::bridges::signal::SignalBridge::new()));
-        registry.register(ProtocolKind::Matrix, Box::new(crate::bridges::matrix::MatrixBridge::new()));
-        registry.register(ProtocolKind::Sms, Box::new(crate::bridges::sms::SmsBridge::new()));
+        registry.register(ProtocolKind::Signal, Box::new(crate::bridges::signal::SignalBridge::new_mock()));
+        registry.register(ProtocolKind::Matrix, Box::new(crate::bridges::matrix::MatrixBridge::new_mock()));
+        registry.register(ProtocolKind::Sms, Box::new(crate::bridges::sms::SmsBridge::new_mock()));
 
         let now = 1700000000;
         // Signal: low latency (15ms)
@@ -2958,8 +2958,8 @@ mod tests {
     #[test]
     fn test_unhealthy_bridge_dynamic_deprioritization() {
         let mut registry = BridgeRegistry::new();
-        registry.register(ProtocolKind::Signal, Box::new(crate::bridges::signal::SignalBridge::new()));
-        registry.register(ProtocolKind::Matrix, Box::new(crate::bridges::matrix::MatrixBridge::new()));
+        registry.register(ProtocolKind::Signal, Box::new(crate::bridges::signal::SignalBridge::new_mock()));
+        registry.register(ProtocolKind::Matrix, Box::new(crate::bridges::matrix::MatrixBridge::new_mock()));
 
         let now = 1700000000;
         // Signal experiences consecutive failures
@@ -3020,7 +3020,7 @@ mod tests {
         let mut registry = BridgeRegistry::new();
 
         // Register Signal bridge but trip its circuit
-        let signal = SignalBridge::new();
+        let signal = SignalBridge::new_mock();
         registry.register(ProtocolKind::Signal, Box::new(signal));
 
         let now = 1700000000;
@@ -3030,7 +3030,7 @@ mod tests {
         registry.record_delivery_metrics(ProtocolKind::Signal, 10, false, now);
 
         // Register healthy Matrix bridge
-        let mut matrix = MatrixBridge::new();
+        let mut matrix = MatrixBridge::new_mock();
         matrix.initialize().await.unwrap();
         registry.register(ProtocolKind::Matrix, Box::new(matrix));
 
@@ -3071,11 +3071,11 @@ mod tests {
 
         let mut registry = BridgeRegistry::new();
         // 1. Primary: Uninitialized iMessage bridge (will fail)
-        let imessage = IMessageBridge::new();
+        let imessage = IMessageBridge::new_mock();
         registry.register(ProtocolKind::IMessage, Box::new(imessage));
 
         // 2. Fallback: Initialized SMS modem bridge (will succeed)
-        let mut sms = SmsBridge::new();
+        let mut sms = SmsBridge::new_mock();
         let _ = <SmsBridge as ProtocolBridge>::initialize(&mut sms).await;
         registry.register(ProtocolKind::Sms, Box::new(sms));
 
@@ -3124,12 +3124,12 @@ mod tests {
         let mut registry = BridgeRegistry::new();
 
         // 1. Signal bridge: initialized, but simulated canary drop (e.g. ISP blackhole)
-        let mut signal = SignalBridge::new();
+        let mut signal = SignalBridge::new_mock();
         signal.initialize().await.unwrap();
         registry.register(ProtocolKind::Signal, Box::new(signal));
 
         // 2. Matrix bridge: initialized, canary succeeds
-        let mut matrix = MatrixBridge::new();
+        let mut matrix = MatrixBridge::new_mock();
         matrix.initialize().await.unwrap();
         registry.register(ProtocolKind::Matrix, Box::new(matrix));
 
@@ -3198,12 +3198,12 @@ mod tests {
         let mut registry = BridgeRegistry::new();
 
         // 1. Cellular SMS bridge: initialized, but tight bandwidth limit (50 bytes)
-        let mut sms = SmsBridge::new();
+        let mut sms = SmsBridge::new_mock();
         let _ = <SmsBridge as ProtocolBridge>::initialize(&mut sms).await;
         registry.register(ProtocolKind::Sms, Box::new(sms));
 
         // 2. Matrix bridge: initialized, unmetered
-        let mut matrix = MatrixBridge::new();
+        let mut matrix = MatrixBridge::new_mock();
         matrix.initialize().await.unwrap();
         registry.register(ProtocolKind::Matrix, Box::new(matrix));
 
@@ -3249,13 +3249,13 @@ mod tests {
         let mut registry = BridgeRegistry::new();
 
         // 1. Matrix: high latency (2500ms > 1000ms threshold)
-        let mut matrix = MatrixBridge::new();
+        let mut matrix = MatrixBridge::new_mock();
         matrix.initialize().await.unwrap();
         registry.register(ProtocolKind::Matrix, Box::new(matrix));
         registry.record_delivery_metrics(ProtocolKind::Matrix, 2500, true, 1700000000);
 
         // 2. Signal: unattempted (0 attempts), healthy
-        let mut signal = SignalBridge::new();
+        let mut signal = SignalBridge::new_mock();
         signal.initialize().await.unwrap();
         registry.register(ProtocolKind::Signal, Box::new(signal));
 
@@ -3292,7 +3292,7 @@ mod tests {
     #[tokio::test]
     async fn test_route_with_payload_integrity_verification() {
         let mut registry = BridgeRegistry::new();
-        let mut signal = SignalBridge::new();
+        let mut signal = SignalBridge::new_mock();
         signal.initialize().await.unwrap();
         registry.register(ProtocolKind::Signal, Box::new(signal));
 
@@ -3342,7 +3342,7 @@ mod tests {
     #[tokio::test]
     async fn test_route_with_replay_and_integrity_guard() {
         let mut registry = BridgeRegistry::new();
-        let mut signal = SignalBridge::new();
+        let mut signal = SignalBridge::new_mock();
         signal.initialize().await.unwrap();
         registry.register(ProtocolKind::Signal, Box::new(signal));
 
@@ -3420,11 +3420,11 @@ mod tests {
     async fn test_route_hedged_racing_primary_success() {
         let mut registry = BridgeRegistry::new();
 
-        let mut signal = SignalBridge::new();
+        let mut signal = SignalBridge::new_mock();
         signal.initialize().await.unwrap();
         registry.register(ProtocolKind::Signal, Box::new(signal));
 
-        let mut matrix = MatrixBridge::new();
+        let mut matrix = MatrixBridge::new_mock();
         matrix.initialize().await.unwrap();
         registry.register(ProtocolKind::Matrix, Box::new(matrix));
 
@@ -3455,11 +3455,11 @@ mod tests {
         let mut registry = BridgeRegistry::new();
 
         // Signal bridge uninitialized (will fail immediate attempt)
-        let signal = SignalBridge::new();
+        let signal = SignalBridge::new_mock();
         registry.register(ProtocolKind::Signal, Box::new(signal));
 
         // Matrix bridge initialized (succeeds)
-        let mut matrix = MatrixBridge::new();
+        let mut matrix = MatrixBridge::new_mock();
         matrix.initialize().await.unwrap();
         registry.register(ProtocolKind::Matrix, Box::new(matrix));
 
@@ -3495,11 +3495,11 @@ mod tests {
         let mut registry = BridgeRegistry::new();
 
         // 1. Signal bridge: uninitialized (fails on all passes)
-        let signal = SignalBridge::new();
+        let signal = SignalBridge::new_mock();
         registry.register(ProtocolKind::Signal, Box::new(signal));
 
         // 2. Matrix bridge: initialized (succeeds)
-        let mut matrix = MatrixBridge::new();
+        let mut matrix = MatrixBridge::new_mock();
         matrix.initialize().await.unwrap();
         registry.register(ProtocolKind::Matrix, Box::new(matrix));
 
@@ -3566,7 +3566,7 @@ mod tests {
         let mut registry = BridgeRegistry::new();
 
         // 1. Signal bridge: repeatedly flaps, has 3 consecutive circuit trips
-        let signal = SignalBridge::new();
+        let signal = SignalBridge::new_mock();
         registry.register(ProtocolKind::Signal, Box::new(signal));
         let now = 1700000000;
         for _ in 0..3 {
@@ -3576,7 +3576,7 @@ mod tests {
         }
 
         // 2. Cellular SMS bridge: stable, initialized, 0 trips
-        let mut sms = SmsBridge::new();
+        let mut sms = SmsBridge::new_mock();
         let _ = <SmsBridge as ProtocolBridge>::initialize(&mut sms).await;
         registry.register(ProtocolKind::Sms, Box::new(sms));
 
@@ -3609,8 +3609,8 @@ mod tests {
         let mut registry = BridgeRegistry::new();
         let now = 1700000000;
 
-        registry.register(ProtocolKind::Signal, Box::new(SignalBridge::new()));
-        registry.register(ProtocolKind::Matrix, Box::new(MatrixBridge::new()));
+        registry.register(ProtocolKind::Signal, Box::new(SignalBridge::new_mock()));
+        registry.register(ProtocolKind::Matrix, Box::new(MatrixBridge::new_mock()));
 
         // Signal: low latency 30ms, but 1 failure -> penalty = 30 + 500 = 530
         registry.record_delivery_metrics(ProtocolKind::Signal, 30, false, now);
@@ -3629,12 +3629,12 @@ mod tests {
         let now = 1700000000;
 
         // 1. Signal bridge: degraded latency (450ms) + 1 failure
-        let signal = SignalBridge::new();
+        let signal = SignalBridge::new_mock();
         registry.register(ProtocolKind::Signal, Box::new(signal));
         registry.record_delivery_metrics(ProtocolKind::Signal, 450, false, now);
 
         // 2. Matrix bridge: fast (30ms), initialized, succeeds
-        let mut matrix = MatrixBridge::new();
+        let mut matrix = MatrixBridge::new_mock();
         matrix.initialize().await.unwrap();
         registry.register(ProtocolKind::Matrix, Box::new(matrix));
         registry.record_delivery_metrics(ProtocolKind::Matrix, 30, true, now);
@@ -3681,11 +3681,11 @@ mod tests {
         let mut registry = BridgeRegistry::new();
 
         // 1. Primary: Signal bridge (uninitialized, fails)
-        let signal = SignalBridge::new();
+        let signal = SignalBridge::new_mock();
         registry.register(ProtocolKind::Signal, Box::new(signal));
 
         // 2. Secondary fallback: Matrix bridge (initialized, succeeds)
-        let mut matrix = MatrixBridge::new();
+        let mut matrix = MatrixBridge::new_mock();
         matrix.initialize().await.unwrap();
         registry.register(ProtocolKind::Matrix, Box::new(matrix));
 
@@ -3735,11 +3735,11 @@ mod tests {
         let mut registry = BridgeRegistry::new();
 
         // 1. Signal bridge: uninitialized (fails)
-        let signal = SignalBridge::new();
+        let signal = SignalBridge::new_mock();
         registry.register(ProtocolKind::Signal, Box::new(signal));
 
         // 2. Cellular SMS bridge: initialized (succeeds)
-        let mut sms = SmsBridge::new();
+        let mut sms = SmsBridge::new_mock();
         let _ = <SmsBridge as ProtocolBridge>::initialize(&mut sms).await;
         registry.register(ProtocolKind::Sms, Box::new(sms));
 
@@ -3781,11 +3781,11 @@ mod tests {
         let mut registry = BridgeRegistry::new();
 
         // 1. Primary: Uninitialized Nostr bridge (will fail)
-        let nostr = NostrBridge::new();
+        let nostr = NostrBridge::new_mock();
         registry.register(ProtocolKind::Nostr, Box::new(nostr));
 
         // 2. Fallback: Initialized Matrix bridge (will succeed)
-        let mut matrix = MatrixBridge::new();
+        let mut matrix = MatrixBridge::new_mock();
         matrix.initialize().await.unwrap();
         registry.register(ProtocolKind::Matrix, Box::new(matrix));
 
@@ -3830,11 +3830,11 @@ mod tests {
         let mut registry = BridgeRegistry::new();
 
         // 1. Matrix bridge: uninitialized (fails)
-        let matrix = MatrixBridge::new();
+        let matrix = MatrixBridge::new_mock();
         registry.register(ProtocolKind::Matrix, Box::new(matrix));
 
         // 2. Cellular SMS bridge: initialized (succeeds)
-        let mut sms = SmsBridge::new();
+        let mut sms = SmsBridge::new_mock();
         let _ = <SmsBridge as ProtocolBridge>::initialize(&mut sms).await;
         registry.register(ProtocolKind::Sms, Box::new(sms));
 
@@ -3894,12 +3894,12 @@ mod tests {
         let mut registry = BridgeRegistry::new();
 
         // 1. Primary Signal bridge: initialized, sends, but simulated receipt fails / silent drop
-        let mut signal = SignalBridge::new();
+        let mut signal = SignalBridge::new_mock();
         signal.initialize().await.unwrap();
         registry.register(ProtocolKind::Signal, Box::new(signal));
 
         // 2. Secondary Matrix bridge: initialized, sends AND returns verified receipt
-        let mut matrix = MatrixBridge::new();
+        let mut matrix = MatrixBridge::new_mock();
         matrix.initialize().await.unwrap();
         registry.register(ProtocolKind::Matrix, Box::new(matrix));
 
@@ -3972,12 +3972,12 @@ mod tests {
         let mut registry = BridgeRegistry::new();
 
         // 1. Primary Signal bridge: initialized (would succeed), but concurrency saturated
-        let mut signal = SignalBridge::new();
+        let mut signal = SignalBridge::new_mock();
         signal.initialize().await.unwrap();
         registry.register(ProtocolKind::Signal, Box::new(signal));
 
         // 2. Secondary Matrix bridge: initialized, unsaturated (succeeds)
-        let mut matrix = MatrixBridge::new();
+        let mut matrix = MatrixBridge::new_mock();
         matrix.initialize().await.unwrap();
         registry.register(ProtocolKind::Matrix, Box::new(matrix));
 
@@ -4032,11 +4032,11 @@ mod tests {
         let mut registry = BridgeRegistry::new();
 
         // 1. Signal bridge: uninitialized (fails)
-        let signal = SignalBridge::new();
+        let signal = SignalBridge::new_mock();
         registry.register(ProtocolKind::Signal, Box::new(signal));
 
         // 2. Matrix bridge: initialized (succeeds)
-        let mut matrix = MatrixBridge::new();
+        let mut matrix = MatrixBridge::new_mock();
         matrix.initialize().await.unwrap();
         registry.register(ProtocolKind::Matrix, Box::new(matrix));
 
@@ -4096,7 +4096,7 @@ mod tests {
     #[tokio::test]
     async fn test_route_with_exact_once_deduplication_enforcement() {
         let mut registry = BridgeRegistry::new();
-        let mut signal = SignalBridge::new();
+        let mut signal = SignalBridge::new_mock();
         signal.initialize().await.unwrap();
         registry.register(ProtocolKind::Signal, Box::new(signal));
 
@@ -4140,7 +4140,7 @@ mod tests {
         let mut registry = BridgeRegistry::new();
 
         // Register Matrix bridge, initialize it so heartbeat probe send will succeed
-        let mut matrix = MatrixBridge::new();
+        let mut matrix = MatrixBridge::new_mock();
         matrix.initialize().await.unwrap();
         registry.register(ProtocolKind::Matrix, Box::new(matrix));
 
@@ -4178,12 +4178,12 @@ mod tests {
         let mut registry = BridgeRegistry::new();
 
         // 1. Matrix: initialized, healthy
-        let mut matrix = MatrixBridge::new();
+        let mut matrix = MatrixBridge::new_mock();
         matrix.initialize().await.unwrap();
         registry.register(ProtocolKind::Matrix, Box::new(matrix));
 
         // 2. Signal: initialized, healthy
-        let mut signal = SignalBridge::new();
+        let mut signal = SignalBridge::new_mock();
         signal.initialize().await.unwrap();
         registry.register(ProtocolKind::Signal, Box::new(signal));
 
@@ -4243,12 +4243,12 @@ mod tests {
         let mut registry = BridgeRegistry::new();
 
         // 1. Initialized SMS bridge (metered, higher financial cost)
-        let mut sms = SmsBridge::new();
+        let mut sms = SmsBridge::new_mock();
         let _ = <SmsBridge as ProtocolBridge>::initialize(&mut sms).await;
         registry.register(ProtocolKind::Sms, Box::new(sms));
 
         // 2. Initialized Matrix bridge (unmetered, zero financial cost)
-        let mut matrix = MatrixBridge::new();
+        let mut matrix = MatrixBridge::new_mock();
         matrix.initialize().await.unwrap();
         registry.register(ProtocolKind::Matrix, Box::new(matrix));
 
@@ -4310,7 +4310,7 @@ mod tests {
     async fn test_rehabilitate_stable_circuits_and_route() {
         let mut registry = BridgeRegistry::new();
 
-        let mut signal = SignalBridge::new();
+        let mut signal = SignalBridge::new_mock();
         signal.initialize().await.unwrap();
         registry.register(ProtocolKind::Signal, Box::new(signal));
 
@@ -4386,11 +4386,11 @@ mod tests {
     async fn test_route_with_dispersal_balancing_execution() {
         let mut registry = BridgeRegistry::new();
 
-        let mut signal = SignalBridge::new();
+        let mut signal = SignalBridge::new_mock();
         signal.initialize().await.unwrap();
         registry.register(ProtocolKind::Signal, Box::new(signal));
 
-        let mut matrix = MatrixBridge::new();
+        let mut matrix = MatrixBridge::new_mock();
         matrix.initialize().await.unwrap();
         registry.register(ProtocolKind::Matrix, Box::new(matrix));
 
@@ -4450,11 +4450,11 @@ mod tests {
         let mut registry = BridgeRegistry::new();
 
         // 1. Signal bridge: uninitialized (fails fast)
-        let signal = SignalBridge::new();
+        let signal = SignalBridge::new_mock();
         registry.register(ProtocolKind::Signal, Box::new(signal));
 
         // 2. Matrix bridge: initialized (succeeds within p95)
-        let mut matrix = MatrixBridge::new();
+        let mut matrix = MatrixBridge::new_mock();
         matrix.initialize().await.unwrap();
         registry.register(ProtocolKind::Matrix, Box::new(matrix));
 

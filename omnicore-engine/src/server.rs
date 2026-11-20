@@ -455,10 +455,10 @@ mod tests {
         use futures_util::{SinkExt as _, StreamExt as _};
         // Registry with initialized Signal + Matrix bridges, like the desktop.
         let mut registry = crate::router::BridgeRegistry::new();
-        let mut signal = crate::bridges::signal::SignalBridge::new();
+        let mut signal = crate::bridges::signal::SignalBridge::new_mock();
         signal.initialize().await.unwrap();
         registry.register(crate::models::ProtocolKind::Signal, Box::new(signal));
-        let mut matrix = crate::bridges::matrix::MatrixBridge::new();
+        let mut matrix = crate::bridges::matrix::MatrixBridge::new_mock();
         matrix.initialize().await.unwrap();
         registry.register(crate::models::ProtocolKind::Matrix, Box::new(matrix));
         let router = Arc::new(crate::router::MultipathRouter::new(Arc::new(RwLock::new(registry))));

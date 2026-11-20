@@ -2,15 +2,28 @@
 
 Granular short-term features, immediate bug fixes, and explicit tasks.
 
+> **Honesty pass (v1.20.2, 2026-11-19):** this list previously checked off
+> "complete" bridges and live-sounding features that are in-memory
+> simulations running against mock transports. Corrections below: bridge
+> "complete" items are unchecked, simulated implementations are labeled
+> *(simulated / in-memory only — not live-verified)*, and the one task
+> that is the actual product is now at the top. Checked items without
+> that label are engine/UI code that exists and is covered by tests
+> against mock transports.
+
+## Next — the actual product
+
+- [ ] **Live-network credentialled delivery proof** (needs user: Matrix homeserver / signald / Discord token + host choice). Until this lands, bobble has never delivered a real message on any network. Planned order: Matrix first (SDK already a dependency), then a Discord bot as the second real bridge so fallback routing becomes meaningful.
+
 - [x] Initialize core engine in Rust.
 - [x] Implement secure database with SQLCipher.
 - [x] Build dispatcher for cross-protocol message routing.
 - [x] Implement ProtocolBridge trait and skeleton bridges (Matrix, Signal, Discord).
 - [x] Initialize Tauri desktop UI and configure Cargo workspace.
 - [x] Build full UI in React instead of raw HTML.
-- [x] Complete matrix bridge implementation.
-- [x] Complete signal bridge implementation.
-- [x] Complete discord bridge implementation.
+- [ ] Complete matrix bridge implementation. (Skeleton only: SDK client is constructed but never logged in; production send returns not-implemented as of v1.20.2. Completion = the live delivery proof above.)
+- [ ] Complete signal bridge implementation. (Skeleton only: signald socket connect exists, JSON send protocol never wired; production send returns not-implemented as of v1.20.2.)
+- [ ] Complete discord bridge implementation. (Skeleton only: bot HTTP client is constructed but never called; production send returns not-implemented as of v1.20.2.)
 - [x] Implement native system tray icon and menu with server management in Tauri.
 - [x] Consolidate dashboard UI into an intuitive single-page multi-pane layout.
 - [x] Wire all backend bridges and metrics to frontend React dashboard.
@@ -20,17 +33,17 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Implement automated timeout-driven fallback dispatching in `omnicore-engine`.
 - [x] Harden SQLCipher pragmas and implement `threads`, `attachments`, and `key_store` tables.
 - [x] Author comprehensive database schema document (`omnicore-engine/SCHEMA.md`).
-- [x] Implement SimpleX Chat bridge in `omnicore-engine/src/bridges/simplex.rs`.
-- [x] Implement Tox DHT P2P bridge in `omnicore-engine/src/bridges/tox.rs`.
-- [x] Implement Cellular GSM/LTE SMS bridge in `omnicore-engine/src/bridges/sms.rs`.
+- [x] Implement SimpleX Chat bridge in `omnicore-engine/src/bridges/simplex.rs`. *(skeleton/mock only — no live transport; production initialize returns not-implemented as of v1.20.2)*
+- [x] Implement Tox DHT P2P bridge in `omnicore-engine/src/bridges/tox.rs`. *(skeleton/mock only — no live transport; production initialize returns not-implemented as of v1.20.2)*
+- [x] Implement Cellular GSM/LTE SMS bridge in `omnicore-engine/src/bridges/sms.rs`. *(skeleton/mock only — no modem was ever opened; production initialize returns not-implemented as of v1.20.2)*
 - [x] Establish React Native / Expo cross-platform mobile shell in `omnicore-mobile/`.
 - [x] Implement `BridgeRegistry` and `MultipathRouter` integration across bridges.
-- [x] Implement macOS AppleScript / BlueBubbles relay bridge in `omnicore-engine/src/bridges/imessage.rs`.
+- [x] Implement macOS AppleScript / BlueBubbles relay bridge in `omnicore-engine/src/bridges/imessage.rs`. *(skeleton/mock only — no relay was ever contacted; production initialize returns not-implemented as of v1.20.2)*
 - [x] Implement local area network P2P peer discovery and beacon handling in `omnicore-engine/src/discovery.rs`.
 - [x] Implement cross-protocol voice/video call session negotiation and WebRTC signaling in `omnicore-engine/src/call.rs`.
 - [x] Implement standalone hardware power telemetry daemon in `omnicore-engine/src/telemetry.rs`.
 - [x] Implement offline outbox queue with exponential backoff and forward secrecy ratchet in `omnicore-engine/src/outbox.rs`.
-- [x] Implement Tor onion service routing and SOCKS5 proxy adapter in `omnicore-engine/src/tor.rs`.
+- [x] Implement Tor onion service routing and SOCKS5 proxy adapter in `omnicore-engine/src/tor.rs`. *(simulated / in-memory only — not live-verified; endpoint validation logic, no live Tor circuit proven)*
 - [x] Implement decentralized cryptographic identity card export and signature verification in `omnicore-engine/src/identity.rs`.
 - [x] Implement zero-knowledge encrypted cloud backup provider in `omnicore-engine/src/backup.rs`.
 - [x] Implement federated group channel state replication with causal vector clocks in `omnicore-engine/src/federation.rs`.
@@ -38,28 +51,29 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Add decentralized reputation scoring and spam defense heuristics in `omnicore-engine/src/reputation.rs`.
 - [x] Implement end-to-end WebSocket proxy bridge connecting omnicore-mobile and omnicore-ui to omnicore-engine daemon in `omnicore-engine/src/server.rs`.
 - [x] Implement decentralized key ratchets and pre-key bundles in `omnicore-engine/src/ratchet.rs`.
-- [x] Implement compute module appliance telemetry evaluation with cellular failover and safe shutdown triggers in `omnicore-engine/src/telemetry.rs`.
+- [x] Implement compute module appliance telemetry evaluation with cellular failover and safe shutdown triggers in `omnicore-engine/src/telemetry.rs`. *(simulated / in-memory only — not live-verified; policy evaluation logic, no appliance hardware involved)*
 - [x] Implement multi-hop mesh announcement with hop decrement and neighbor peer caching in `omnicore-engine/src/discovery.rs`.
-- [x] Implement multi-hop packet store-and-forward mesh relay protocol over BLE and Wi-Fi Direct in `omnicore-engine/src/mesh.rs`.
-- [x] Implement BLE GATT peripheral/central service daemon coordinator and TTL cache pruning in `omnicore-engine/src/mesh.rs`.
+- [x] Implement multi-hop packet store-and-forward mesh relay protocol over BLE and Wi-Fi Direct in `omnicore-engine/src/mesh.rs`. *(simulated / in-memory only — not live-verified; no BLE or Wi-Fi Direct transport exists, see the unchecked native-driver item below)*
+- [x] Implement BLE GATT peripheral/central service daemon coordinator and TTL cache pruning in `omnicore-engine/src/mesh.rs`. *(simulated / in-memory only — not live-verified)*
 - [ ] Implement native Bluetooth HCI adapter driver and Android Wi-Fi Direct socket listener.
-- [x] Implement cross-protocol voice and video media gateway aggregation bridging WebRTC, Matrix VoIP, and Discord voice in `omnicore-engine/src/call.rs`.
+- [x] Implement cross-protocol voice and video media gateway aggregation bridging WebRTC, Matrix VoIP, and Discord voice in `omnicore-engine/src/call.rs`. *(simulated / in-memory only — not live-verified; signaling state machine only, no media ever flowed)*
 - [x] Implement optimal cascade routing with automated circuit-breaker bypass and metric updates in `omnicore-engine/src/router.rs`.
 - [x] Implement RTP jitter buffer with sequence reordering and packet loss concealment in `omnicore-engine/src/call.rs`.
-- [x] Harden `IMessageBridge` and `SmsBridge` with validation, retry loops, and iMessage-to-SMS fallback tests.
+- [x] Harden `IMessageBridge` and `SmsBridge` with validation, retry loops, and iMessage-to-SMS fallback tests. *(validation and routing logic only — all tests run against mock transports)*
 - [x] Implement dynamic bit-rate scaling and frame duration adaptation in `omnicore-engine/src/call.rs`.
 - [x] Implement bridge health diagnostics and anomaly detection in `omnicore-engine/src/telemetry.rs`.
 - [x] Implement starvation prevention and probe discovery in `omnicore-engine/src/router.rs`.
 - [x] Implement cryptographic payload digest integrity verification across cascading fallbacks in `omnicore-engine/src/router.rs`.
 - [x] Implement replay attack protection and nonce caching in `omnicore-engine/src/router.rs`.
-- [x] Implement video simulcast and temporal resolution adaptation in `omnicore-engine/src/call.rs`.
-- [x] Implement end-to-end encrypted screen sharing pipeline in `omnicore-engine/src/call.rs`.
-- [x] Implement zero-copy video frame buffer pooling in `omnicore-engine/src/call.rs`.
-- [x] Implement dynamic spatial downsampling and YUV color space conversion in `omnicore-engine/src/call.rs`.
-- [x] Implement hardware-accelerated video encoder drivers and software fallback in `omnicore-engine/src/call.rs`.
-- [x] Implement hardware-accelerated video decoder pipeline and IDR synchronization in `omnicore-engine/src/call.rs`.
+- [x] Implement video simulcast and temporal resolution adaptation in `omnicore-engine/src/call.rs`. *(simulated / in-memory only — not live-verified)*
+- [x] Implement end-to-end encrypted screen sharing pipeline in `omnicore-engine/src/call.rs`. *(simulated / in-memory only — not live-verified)*
+- [x] Implement zero-copy video frame buffer pooling in `omnicore-engine/src/call.rs`. *(simulated / in-memory only — not live-verified)*
+- [x] Implement dynamic spatial downsampling and YUV color space conversion in `omnicore-engine/src/call.rs`. *(simulated / in-memory only — not live-verified)*
+- [x] Implement hardware-accelerated video encoder drivers and software fallback in `omnicore-engine/src/call.rs`. *(simulated / in-memory only — not live-verified; no hardware encoder was ever driven)*
+- [x] Implement hardware-accelerated video decoder pipeline and IDR synchronization in `omnicore-engine/src/call.rs`. *(simulated / in-memory only — not live-verified; no hardware decoder was ever driven)*
 - [x] Implement hedged multi-path racing router and circuit dynamic cooldown jitter in `omnicore-engine/src/router.rs`.
-- [x] Implement multi-bridge mesh relay hedged broadcast in `omnicore-engine/src/federation.rs` and verify across 5 platforms.
+- [x] Implement multi-bridge mesh relay hedged broadcast in `omnicore-engine/src/federation.rs`. *(in-memory implementation + tests)*
+- [ ] Verify multi-bridge mesh relay hedged broadcast across 5 platforms. (Previously checked — that verification never happened; the broadcast has only ever run in-memory against mock bridges.)
 - [x] Implement adaptive multi-pass fallback retry routing with half-open circuit recovery in `omnicore-engine/src/router.rs`.
 - [x] Implement flapping network resilience with exponential circuit cooldown backoff in `omnicore-engine/src/router.rs`.
 - [x] Implement federated batch broadcast with concurrency rate limiting under heavy load in `omnicore-engine/src/federation.rs`.
@@ -67,7 +81,7 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [x] Implement cross-protocol dynamic address translation and unified message routing in `omnicore-engine/src/router.rs`.
 - [x] Implement store-and-forward mesh relay bridge gateway adapter in `omnicore-engine/src/mesh.rs`.
 - [x] Implement dynamic cross-protocol packet fragmentation and MTU adaptation in `omnicore-engine/src/router.rs`.
-- [x] Implement Nostr decentralized relay protocol bridge in `omnicore-engine/src/bridges/nostr.rs`.
+- [x] Implement Nostr decentralized relay protocol bridge in `omnicore-engine/src/bridges/nostr.rs`. *(skeleton/mock only — no relay was ever contacted and the "public key" is a hardcoded synthetic string; production initialize returns not-implemented as of v1.20.2)*
 - [x] Implement dynamic content transcoding and format sanitization in `omnicore-engine/src/router.rs`.
 - [x] Implement asymmetric network partition broadcast routing in `omnicore-engine/src/federation.rs`.
 - [x] Implement end-to-end cryptographic delivery receipt tracking and silent-drop cascade in `omnicore-engine/src/router.rs`.
@@ -85,7 +99,6 @@ Granular short-term features, immediate bug fixes, and explicit tasks.
 - [ ] Live-test native tray on Windows (left-click show, quit-servers-only) on a real desktop session.
 - [ ] Restore direct registry.npmjs.org installs (TLS alert seen 2026-11-13; mirror registry used as workaround — environment/network issue, see HANDOFF).
 
-- [ ] Live-network credentialled delivery proof (needs user: Matrix homeserver / signald / Discord token + host choice).
 - [ ] Human tray click-through check on Windows (left-click show, Pause workers, Quit servers only) while the app runs.
 - [x] Expo 58 / React Native 0.88 migration (shipped in v1.17.0; dependabot PR #5 superseded, no longer open).
 - [x] Identity card import + pairing in the Security panel (v1.18.0: QR/JSON import verifies the signature, adds the peer to People deduped by unified_id, tampered cards rejected).

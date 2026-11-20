@@ -3,30 +3,49 @@ use async_trait::async_trait;
 use crate::bridge::ProtocolBridge;
 use crate::dispatcher::MessagePayload;
 
+/// SMS (cellular modem) bridge.
+///
+/// HONESTY NOTE (v1.20.2): this bridge never opened a serial port or
+/// issued a single AT command — "dispatch" was a `println!` inside a
+/// retry loop. A production bridge (`new` / `with_port`) therefore
+/// fails at `initialize` instead of claiming a ready modem. The
+/// simulated behaviour (including payload validation) exists only
+/// behind `new_mock()`, for tests.
 pub struct SmsBridge {
     serial_port: String,
     baud_rate: u32,
     ready: bool,
     pub max_retries: u32,
+    mock: bool,
 }
 
 impl SmsBridge {
     pub fn new() -> Self {
-        Self {
-            serial_port: "/dev/ttyUSB0".to_string(),
-            baud_rate: 115200,
-            ready: false,
-            max_retries: 2,
-        }
+        Self::build("/dev/ttyUSB0".to_string(), 115200, false)
     }
 
     pub fn with_port(serial_port: &str, baud_rate: u32) -> Self {
+        Self::build(serial_port.to_string(), baud_rate, false)
+    }
+
+    /// Explicit mock transport: initialization always reports a ready
+    /// modem and sends always "succeed" by printing. For tests only.
+    pub fn new_mock() -> Self {
+        Self::build("/dev/ttyUSB0".to_string(), 115200, true)
+    }
+
+    fn build(serial_port: String, baud_rate: u32, mock: bool) -> Self {
         Self {
-            serial_port: serial_port.to_string(),
+            serial_port,
             baud_rate,
             ready: false,
             max_retries: 2,
+            mock,
         }
+    }
+
+    pub fn is_mock(&self) -> bool {
+        self.mock
     }
 
     pub fn is_ready(&self) -> bool {
@@ -37,8 +56,15 @@ impl SmsBridge {
 #[async_trait]
 impl ProtocolBridge for SmsBridge {
     async fn initialize(&mut self) -> Result<()> {
+        if !self.mock {
+            return Err(anyhow!(
+                "SMS live transport not implemented: bridge is a mock skeleton and never opened \
+                 modem port {} (mock transport: SmsBridge::new_mock())",
+                self.serial_port
+            ));
+        }
         println!(
-            "Initializing GSM modem at {} ({} baud) for cellular SMS fallback",
+            "Initializing mock GSM modem at {} ({} baud) for cellular SMS fallback",
             self.serial_port, self.baud_rate
         );
         self.ready = true;
@@ -58,7 +84,8 @@ impl ProtocolBridge for SmsBridge {
             return Err(anyhow!("Cannot send empty SMS text message"));
         }
 
-        // Retry loop for AT command Hayes modem dispatch
+        // Mock-only path (production bridges can never be `ready`):
+        // simulated AT dispatch with retries.
         let mut last_err = None;
         for attempt in 0..=self.max_retries {
             if attempt > 0 {
@@ -66,7 +93,7 @@ impl ProtocolBridge for SmsBridge {
             }
 
             println!(
-                "Cellular SMS AT dispatch attempt {}/{} to {}: {}",
+                "Mock cellular SMS AT dispatch attempt {}/{} to {}: {}",
                 attempt + 1, self.max_retries + 1, payload.recipient_id, payload.content
             );
             if !self.serial_port.is_empty() {
@@ -90,8 +117,16 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_sms_init_and_send() {
+    async fn test_sms_production_init_fails_honestly() {
         let mut bridge = SmsBridge::new();
+        assert!(bridge.initialize().await.is_err());
+        assert!(!bridge.is_ready());
+    }
+
+    #[tokio::test]
+    async fn test_sms_mock_init_and_send() {
+        let mut bridge = SmsBridge::new_mock();
+        assert!(bridge.is_mock());
         assert!(bridge.initialize().await.is_ok());
 
         let payload = MessagePayload {
@@ -107,7 +142,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sms_validation_rules() {
-        let mut bridge = SmsBridge::new();
+        let mut bridge = SmsBridge::new_mock();
         bridge.initialize().await.unwrap();
 
         // Empty phone number

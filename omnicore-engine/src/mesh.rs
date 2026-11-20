@@ -438,11 +438,11 @@ mod tests {
         let mut registry = BridgeRegistry::new();
 
         // 1. Signal bridge: uninitialized (fails dispatch)
-        let signal = SignalBridge::new();
+        let signal = SignalBridge::new_mock();
         registry.register(ProtocolKind::Signal, Box::new(signal));
 
         // 2. Cellular SMS bridge: initialized (succeeds)
-        let mut sms = SmsBridge::new();
+        let mut sms = SmsBridge::new_mock();
         let _ = <SmsBridge as ProtocolBridge>::initialize(&mut sms).await;
         registry.register(ProtocolKind::Sms, Box::new(sms));
 

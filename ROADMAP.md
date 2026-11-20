@@ -14,15 +14,24 @@ Major, long-term structural milestones and structural plans.
 - Consolidated single-page multi-pane React dashboard prioritizing highest-value messaging, cross-protocol routing, and bridge management.
 - Live bridge status control deck and routing monitor.
 
-## Milestone 3: Protocol Bridges & Multipath Routing Integration (Completed)
-- Matrix homeserver bridge (`matrix-sdk`) with sync token persistence.
-- Signal Protocol IPC daemon bridge (`signald`).
-- Discord REST and gateway bridge (`serenity`).
-- SimpleX Chat cryptographic queue bridge (`simplex.rs`).
-- Tox DHT P2P transport module (`tox.rs`).
-- GSM/LTE Cellular SMS modem bridge (`sms.rs`).
-- macOS AppleScript / BlueBubbles iMessage relay bridge (`imessage.rs`).
-- Dynamic `BridgeRegistry` and `MultipathRouter` executing sequential fallback cascades.
+## Milestone 3: Protocol Bridges & Multipath Routing Integration (Skeleton complete — NO live delivery)
+> **Corrected 2026-11-19 (v1.20.2):** this milestone previously said
+> "Completed." What is complete is the bridge *skeletons* and the router
+> that cascades between them. No bridge has a live transport: Matrix and
+> Discord construct SDK clients that are never logged in or called, and
+> the other six never contacted anything at all. As of v1.20.2 the
+> production bridges return errors instead of faking deliveries, mock
+> transports live behind explicit `new_mock()` constructors, and the
+> remaining work — one real bridge, then a second — is the open
+> milestone at the end of this roadmap.
+- Matrix homeserver bridge skeleton (`matrix-sdk`; client constructed, never logged in, no sync).
+- Signal Protocol IPC daemon bridge skeleton (`signald`; socket connect exists, send protocol not wired).
+- Discord REST and gateway bridge skeleton (`serenity`; HTTP client constructed, never called).
+- SimpleX Chat queue bridge skeleton (`simplex.rs`; mock only).
+- Tox DHT P2P transport skeleton (`tox.rs`; mock only).
+- GSM/LTE Cellular SMS modem bridge skeleton (`sms.rs`; mock only, no modem ever opened).
+- macOS AppleScript / BlueBubbles iMessage relay bridge skeleton (`imessage.rs`; mock only).
+- Dynamic `BridgeRegistry` and `MultipathRouter` executing sequential fallback cascades (real, tested — against mock transports).
 - WebRTC & Matrix VoIP cross-protocol call session negotiation (`call.rs`).
 - Standalone hardware appliance power and health telemetry (`telemetry.rs`).
 - Offline outbox queue with exponential backoff and forward secrecy ratchet (`outbox.rs`).
@@ -37,13 +46,17 @@ Major, long-term structural milestones and structural plans.
 - Multi-target bundling (Desktop + Android + iOS) with automated packaging pipeline (`scripts/bundle.sh`).
 - Mobile daemon settings, Tor SOCKS5 proxy, and cryptographic identity pairing.
 
-## Milestone 5: Production Hardening, Key Ratchets & Native Performance (Completed)
+## Milestone 5: Production Hardening, Key Ratchets & Native Performance (Partially completed)
 - Double Ratchet session persistence and X3DH pre-key bundles in SQLCipher key_store (`ratchet.rs`).
 - WebSocket IPC daemon server with session-targeted event broadcasting (`server.rs`).
-- Cross-platform federation and multi-tier cascade routing with circuit breakers (`router.rs`, `federation.rs`).
-- Matrix and Discord bridge delivery reliability and retry loops (`bridges/`).
+- Cross-platform federation and multi-tier cascade routing with circuit breakers (`router.rs`, `federation.rs`) — in-memory, tested against mock transports.
+- ~~Matrix and Discord bridge delivery reliability and retry loops (`bridges/`)~~ — **removed as a claim (2026-11-19):** the "retry loops" printed an attempt line and returned success without sending anything. There is no live delivery to be reliable about yet; see the open milestone below.
 
 ## Milestone 6: Autonomous Hardware Appliance & Mesh Expansion (In Progress)
+> Note (2026-11-19): the checked items below are in-memory implementations
+> with tests — mesh relay, call/media pipelines, and appliance telemetry
+> are simulations. None has run against live hardware or a live network,
+> and the native drivers item below remains unchecked.
 - [x] Standalone compute module appliance telemetry evaluation with automated cellular LTE failover and safe shutdown policies (`telemetry.rs`).
 - [x] Multi-hop P2P mesh announcement format with hop limit decrement and transport tagging (`MeshTransportType`).
 - [x] In-memory neighbor peer discovery caching (`PeerDiscovery::cache_peer`, `get_cached_peers`).
@@ -90,3 +103,9 @@ Major, long-term structural milestones and structural plans.
 - [x] System tray completed: show/hide, pause/resume workers, probe bridges, quit-servers-only, quit all.
 - [ ] Next: wire routing-profile selection into the actual Dispatcher/MultipathRouter execution path (currently selects and logs the profile; dispatch still uses the default cascade in the desktop shell).
 - [ ] Next: live daemon session wiring — desktop/mobile should subscribe to WebSocketServer events instead of polling invoke calls.
+
+## Milestone 8: First Live Bridge (Open — the actual product)
+- [ ] Matrix bridge: real login (access token), sync, join room, send + receive against a real homeserver, proven end-to-end with a second account.
+- [ ] Discord bot bridge: real bot token, send + receive in a real server.
+- [ ] Re-run the MultipathRouter fallback cascade against the two live bridges and record a real cross-network delivery (e.g. Matrix → Discord) as the first live delivery proof.
+- [ ] Only after the above: revisit Signal (signald JSON protocol), then SimpleX / SMS / others in priority order.

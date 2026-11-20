@@ -3,30 +3,54 @@ use async_trait::async_trait;
 use crate::bridge::ProtocolBridge;
 use crate::dispatcher::MessagePayload;
 
+/// iMessage relay bridge.
+///
+/// HONESTY NOTE (v1.20.2): this bridge never contacted a BlueBubbles /
+/// AppleScript relay — "dispatch" was a `println!` behind a comment
+/// that literally said "Simulated network call". A production bridge
+/// (`new` / `with_config`) therefore fails at `initialize` instead of
+/// claiming a relay connection. The simulated behaviour (including
+/// payload validation) exists only behind `new_mock()` /
+/// `with_config_mock()`, for tests.
 pub struct IMessageBridge {
     server_url: String,
     pub password: Option<String>,
     connected: bool,
     pub max_retries: u32,
+    mock: bool,
 }
 
 impl IMessageBridge {
     pub fn new() -> Self {
-        Self {
-            server_url: "http://127.0.0.1:1234".to_string(),
-            password: None,
-            connected: false,
-            max_retries: 2,
-        }
+        Self::build("http://127.0.0.1:1234".to_string(), None, false)
     }
 
     pub fn with_config(server_url: &str, password: Option<&str>) -> Self {
+        Self::build(server_url.to_string(), password.map(|p| p.to_string()), false)
+    }
+
+    /// Explicit mock transport: initialization always "connects" and
+    /// sends always "succeed" by printing. For tests/simulations only.
+    pub fn new_mock() -> Self {
+        Self::build("http://127.0.0.1:1234".to_string(), None, true)
+    }
+
+    pub fn with_config_mock(server_url: &str, password: Option<&str>) -> Self {
+        Self::build(server_url.to_string(), password.map(|p| p.to_string()), true)
+    }
+
+    fn build(server_url: String, password: Option<String>, mock: bool) -> Self {
         Self {
-            server_url: server_url.to_string(),
-            password: password.map(|s| s.to_string()),
+            server_url,
+            password,
             connected: false,
             max_retries: 2,
+            mock,
         }
+    }
+
+    pub fn is_mock(&self) -> bool {
+        self.mock
     }
 
     pub fn is_connected(&self) -> bool {
@@ -37,8 +61,15 @@ impl IMessageBridge {
 #[async_trait]
 impl ProtocolBridge for IMessageBridge {
     async fn initialize(&mut self) -> Result<()> {
+        if !self.mock {
+            return Err(anyhow!(
+                "iMessage live transport not implemented: bridge is a mock skeleton and never \
+                 connected to relay server {} (mock transport: IMessageBridge::new_mock())",
+                self.server_url
+            ));
+        }
         println!(
-            "Connecting to iMessage relay server at {} (auth: {})",
+            "Connecting mock iMessage relay bridge to {} (auth: {})",
             self.server_url,
             if self.password.is_some() { "configured" } else { "none" }
         );
@@ -59,7 +90,8 @@ impl ProtocolBridge for IMessageBridge {
             return Err(anyhow!("Cannot send empty iMessage content"));
         }
 
-        // Retry loop on transient dispatch failures
+        // Mock-only path (production bridges can never be `connected`):
+        // simulated relay dispatch with retries.
         let mut last_err = None;
         for attempt in 0..=self.max_retries {
             if attempt > 0 {
@@ -67,10 +99,9 @@ impl ProtocolBridge for IMessageBridge {
             }
 
             println!(
-                "iMessage relay dispatch attempt {}/{} to {}: {}",
+                "Mock iMessage relay dispatch attempt {}/{} to {}: {}",
                 attempt + 1, self.max_retries + 1, payload.recipient_id, payload.content
             );
-            // Simulated network call
             if !self.server_url.is_empty() {
                 return Ok(());
             } else {
@@ -92,8 +123,16 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_imessage_init_and_send() {
-        let mut bridge = IMessageBridge::with_config("http://127.0.0.1:1234", Some("secret"));
+    async fn test_imessage_production_init_fails_honestly() {
+        let mut bridge = IMessageBridge::new();
+        assert!(bridge.initialize().await.is_err());
+        assert!(!bridge.is_connected());
+    }
+
+    #[tokio::test]
+    async fn test_imessage_mock_init_and_send() {
+        let mut bridge = IMessageBridge::with_config_mock("http://127.0.0.1:1234", Some("secret"));
+        assert!(bridge.is_mock());
         assert!(bridge.initialize().await.is_ok());
 
         let payload = MessagePayload {
@@ -109,7 +148,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_imessage_validation_rules() {
-        let mut bridge = IMessageBridge::new();
+        let mut bridge = IMessageBridge::new_mock();
         bridge.initialize().await.unwrap();
 
         // Empty recipient

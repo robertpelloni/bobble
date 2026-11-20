@@ -918,7 +918,10 @@ async fn init_engine(app: AppHandle, state: State<'_, AppState>) -> Result<Strin
     // Start the in-process daemon and register this UI as a client session,
     // so sends can broadcast events to subscribed sessions (see send_message).
     // Build the message router first (all 8 bridges, candidates initialized)
-    // so daemon SendMessage RPCs from socket clients route for real.
+    // so daemon SendMessage RPCs from socket clients go through the real
+    // MultipathRouter. The bridges themselves have no live transports yet
+    // (v1.20.2), so routed sends fail honestly instead of being reported
+    // as delivered.
     let all_protocols = [
         omnicore_engine::models::ProtocolKind::Signal,
         omnicore_engine::models::ProtocolKind::Matrix,
@@ -1060,7 +1063,13 @@ fn get_messages(state: State<'_, AppState>) -> Vec<MessageItem> {
 }
 
 /// Builds a BridgeRegistry with all 8 engine bridges and initializes the
-/// candidate bridges so their send_message guards pass.
+/// candidate bridges. Production bridges are honest transports: as of
+/// v1.20.2 none of them has a live network implementation, so
+/// initialization fails for the skeleton bridges (Signal without
+/// signald, SimpleX, Tox, SMS, iMessage, Nostr) and sends fail for all
+/// of them — the router will report failure / queue to the outbox
+/// instead of claiming a delivery that never happened. Mock transports
+/// (`new_mock`) exist only in tests.
 async fn build_router(_state: &AppState, candidates: &[omnicore_engine::models::ProtocolKind]) -> omnicore_engine::router::MultipathRouter {
     use omnicore_engine::bridges::*;
     use omnicore_engine::models::ProtocolKind as P;
@@ -2117,10 +2126,36 @@ mod tests {
         assert!(!crate::end_call_inner(&state, &call.route_id).unwrap());
     }
 
+    /// Test-only router built from explicit mock bridges (production
+    /// `build_router` uses honest bridges, whose sends fail until a live
+    /// transport exists — routing-behaviour tests need a working
+    /// transport, and the mock is the honest way to get one).
+    async fn build_mock_router(candidates: &[omnicore_engine::models::ProtocolKind]) -> omnicore_engine::router::MultipathRouter {
+        use omnicore_engine::bridge::ProtocolBridge as _;
+        use omnicore_engine::bridges::*;
+        use omnicore_engine::models::ProtocolKind as P;
+        let mut registry = omnicore_engine::router::BridgeRegistry::new();
+        registry.register(P::Signal, Box::new(signal::SignalBridge::new_mock()));
+        registry.register(P::Matrix, Box::new(matrix::MatrixBridge::new_mock()));
+        registry.register(P::Discord, Box::new(discord::DiscordBridge::new_mock()));
+        registry.register(P::Simplex, Box::new(simplex::SimplexBridge::new_mock()));
+        registry.register(P::Tox, Box::new(tox::ToxBridge::new_mock()));
+        registry.register(P::IMessage, Box::new(imessage::IMessageBridge::new_mock()));
+        registry.register(P::Sms, Box::new(sms::SmsBridge::new_mock()));
+        registry.register(P::Nostr, Box::new(nostr::NostrBridge::new_mock()));
+        for &kind in candidates {
+            if let Some(bridge_ref) = registry.get(kind) {
+                let mut bridge = bridge_ref.write().await;
+                let _ = bridge.initialize().await;
+            }
+        }
+        omnicore_engine::router::MultipathRouter::new(std::sync::Arc::new(tokio::sync::RwLock::new(registry)))
+    }
+
     #[tokio::test]
     async fn test_probe_recovers_tripped_circuit() {
         let state = AppState::default();
-        let router = crate::build_router(&state, &[omnicore_engine::models::ProtocolKind::Matrix]).await;
+        let router = build_mock_router(&[omnicore_engine::models::ProtocolKind::Matrix]).await;
         let router = std::sync::Arc::new(router);
         // Trip the Matrix circuit with 3 consecutive failures.
         {
@@ -2144,8 +2179,8 @@ mod tests {
     #[tokio::test]
     async fn test_router_metrics_persist_across_sends() {
         let state = AppState::default();
-        // Simulate engine init: store a shared router, then send twice.
-        let router = crate::build_router(&state, &[omnicore_engine::models::ProtocolKind::Signal, omnicore_engine::models::ProtocolKind::Matrix]).await;
+        // Simulate engine init: store a shared (mock-transport) router, then send twice.
+        let router = build_mock_router(&[omnicore_engine::models::ProtocolKind::Signal, omnicore_engine::models::ProtocolKind::Matrix]).await;
         *state.router.write().await = Some(std::sync::Arc::new(router));
         crate::execute_routing_profile(&state, "optimal_cascade", "Alice Montgomery", "one", "Signal", "Matrix").await.unwrap();
         crate::execute_routing_profile(&state, "optimal_cascade", "Alice Montgomery", "two", "Signal", "Matrix").await.unwrap();

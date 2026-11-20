@@ -2,10 +2,20 @@
 
 Summarize everything learned during the session that was not obvious at the start. Document the entire session history, findings, structural shifts, and system memories.
 
+> **Correction (2026-11-19, v1.20.2 honesty pass):** the undated summary
+> below predates several versions and overstates the bridges. Current
+> truth: global version is in `VERSION.md` (**1.20.2**, not 1.0.4);
+> skeleton bridges exist for 8 transports (incl. Nostr) but **none has a
+> live transport** — as of v1.20.2 production bridges return errors
+> instead of faking delivery, and mock transports exist only behind
+> explicit `new_mock()` constructors for tests. Dated session entries
+> further down are historical and their version/feature claims are
+> as-of their dates.
+
 - Project started with core Rust engine and workspace initialization.
 - Core engine has a hardened SQLite + SQLCipher database schema built with rusqlite (documented in `omnicore-engine/SCHEMA.md`).
 - SQLCipher pragmas include page size 4096, KDF iterations 256000, and strict foreign key checks.
-- Protocol bridges are implemented across 7 distinct transports:
+- Protocol bridge skeletons exist across 7 distinct transports (none has a live transport — see correction note at top):
   - Matrix (`matrix-sdk`)
   - Signal (`signald` IPC)
   - Discord (`serenity`)
@@ -26,7 +36,7 @@ Summarize everything learned during the session that was not obvious at the star
 - The desktop frontend UI was completely redesigned and consolidated into a high-value single-page multi-pane interface in React 19 + TypeScript + TailwindCSS.
 - Cross-platform mobile shell established in `omnicore-mobile/` using React Native / Expo, providing on-device conversation feeds, transport tags, and bridge telemetry.
 - Automation scripts were created in `scripts/`: `build.sh`, `test.sh`, `dev.sh`, `run.sh`.
-- Global version is governed by `VERSION.md` (1.0.4).
+- Global version is governed by `VERSION.md` (1.20.2 as of the 2026-11-19 honesty pass; this line previously said 1.0.4, 16 versions stale).
 - Silent Delivery Drop Canary Detector: Implemented `CanaryDropDetector` and `MultipathRouter::route_with_canary_drop_detection` in `omnicore-engine/src/router.rs` to detect unacknowledged packet drops and blackholed bridges before standard timeouts expire.
 - Dynamic Latency Window & Percentile-Bounded Routing: Implemented `RouteLatencyEstimator` and `MultipathRouter::route_with_percentile_bounded_cascade` in `omnicore-engine/src/router.rs` to compute historical p50/p95 latency envelopes and eliminate tail latency stalls.
 - Multi-Party Delivery Ledger: Implemented `FederatedDeliveryLedger` and `FederationManager::broadcast_event_with_delivery_ledger` in `omnicore-engine/src/federation.rs` to track member receipts across multi-bridge mesh relays and avoid duplicate transmissions during selective retries.
@@ -209,3 +219,11 @@ Shipped since v1.1.0: routing profiles execute (1.1.1), daemon subscriptions (1.
 - Re-verified v1.17.1 tree at `81bc00e` (main == origin/main, no open PRs): `cargo test --workspace` 151 passed (133 engine + 18 UI), desktop frontend `npm run build` passes, mobile `npx tsc --noEmit` passes. Last CI run on main (workflow_dispatch) succeeded; the two Dependabot failures on 2026-11-16 are update-job failures, not code CI.
 - No autonomous code task remains: every open TODO item needs user credentials, a human tray check, or native hardware drivers. Doc catch-up only in this session (HANDOFF/README/TODO synced to v1.17.1).
 
+
+### Session 2026-11-19 (v1.20.2, honesty pass) — [Bobbi / Muse, bobble main side chat]
+- Owner asked for an assessment, then directed "Fix Tier 1 + 2": Tier 1 = docs/claims, Tier 2 = bridges stop faking delivery. Tier 3 (first live bridge, Matrix) was NOT authorized and still needs user credentials (Matrix account / test room; Discord bot token + server).
+- Tier 2 (code): all 8 bridges rewritten. Production constructors now fail honestly — Signal `initialize` errors when signald is unreachable and `send_message` returns not-implemented (signald JSON protocol was never wired); Matrix/Discord `send_message` returns not-implemented (SDK clients constructed, never logged in/called); SimpleX/Tox/SMS/iMessage/Nostr `initialize` returns not-implemented. Mock behaviour preserved only behind explicit `new_mock()` constructors (plus `SignalBridge::with_socket_path` and `IMessageBridge::with_config_mock`). `ProtocolBridge` trait documents the contract: Ok only for an actual live handoff.
+- Test migration: 79 call sites in engine `router.rs` / `federation.rs` / `mesh.rs` / `server.rs` tests switched to `new_mock()`; desktop `main.rs` keeps production bridges in `build_router` and its two routing tests now use a test-only mock router helper. Bridge-local tests now assert the honest production errors plus mock behaviour.
+- Verified locally (Linux sandbox): `cargo test -p omnicore-engine` **142 passed / 0 failed**. Desktop crate could not be compiled in the sandbox (no webkit2gtk/gtk system libs); `omnicore-ui/src/main.rs` parses clean under rustfmt, and the desktop test job is left to CI on this push.
+- Tier 1 (docs): README status corrected to current with mock status up front; TODO unchecks the three "Complete … bridge" items, labels simulated implementations, unchecks "verify across 5 platforms", and puts the live delivery proof first; ROADMAP Milestone 3 retitled "Skeleton complete — NO live delivery", Milestone 5 "Partially completed" with the delivery-reliability claim struck, new open Milestone 8 = first live bridge; this file's stale 1.0.4 summary line corrected at the top. Version bumped to 1.20.2 in VERSION.md, both Cargo.toml, tauri.conf.json, ui/package.json, mobile app.json + package.json (Cargo.lock via cargo).
+- Consequence to expect: desktop/daemon sends now fail or queue to the outbox instead of reporting "delivered". That is the intended honest state until Milestone 8 lands.

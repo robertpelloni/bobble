@@ -843,11 +843,11 @@ mod tests {
 
         let mut registry = BridgeRegistry::new();
         // Signal bridge uninitialized (will fail send)
-        let signal = SignalBridge::new();
+        let signal = SignalBridge::new_mock();
         registry.register(ProtocolKind::Signal, Box::new(signal));
 
         // SMS bridge initialized (will succeed as fallback)
-        let mut sms = SmsBridge::new();
+        let mut sms = SmsBridge::new_mock();
         let _ = <SmsBridge as ProtocolBridge>::initialize(&mut sms).await;
         registry.register(ProtocolKind::Sms, Box::new(sms));
 
@@ -912,14 +912,14 @@ mod tests {
 
         // Configure router with initialized Matrix & SMS bridges, uninitialized Signal
         let mut registry = BridgeRegistry::new();
-        let signal = SignalBridge::new(); // will fail send
+        let signal = SignalBridge::new_mock(); // will fail send
         registry.register(ProtocolKind::Signal, Box::new(signal));
 
-        let mut matrix = MatrixBridge::new();
+        let mut matrix = MatrixBridge::new_mock();
         matrix.initialize().await.unwrap(); // will succeed
         registry.register(ProtocolKind::Matrix, Box::new(matrix));
 
-        let mut sms = SmsBridge::new();
+        let mut sms = SmsBridge::new_mock();
         let _ = <SmsBridge as ProtocolBridge>::initialize(&mut sms).await;
         registry.register(ProtocolKind::Sms, Box::new(sms));
 
@@ -1043,7 +1043,7 @@ mod tests {
 
         // 3. Broadcast message using migrated bridge
         let mut registry = BridgeRegistry::new();
-        let mut matrix = MatrixBridge::new();
+        let mut matrix = MatrixBridge::new_mock();
         let _ = <MatrixBridge as ProtocolBridge>::initialize(&mut matrix).await;
         registry.register(ProtocolKind::Matrix, Box::new(matrix));
 
@@ -1095,11 +1095,11 @@ mod tests {
 
         let mut registry = BridgeRegistry::new();
         // Signal bridge: uninitialized (fails)
-        let signal = SignalBridge::new();
+        let signal = SignalBridge::new_mock();
         registry.register(ProtocolKind::Signal, Box::new(signal));
 
         // Matrix bridge: initialized (succeeds)
-        let mut matrix = MatrixBridge::new();
+        let mut matrix = MatrixBridge::new_mock();
         let _ = <MatrixBridge as ProtocolBridge>::initialize(&mut matrix).await;
         registry.register(ProtocolKind::Matrix, Box::new(matrix));
 
