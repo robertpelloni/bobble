@@ -2054,7 +2054,11 @@ mod tests {
     #[tokio::test]
     async fn test_execute_routing_profile_optimal_and_exact_once() {
         let state = AppState::default();
-        // Optimal cascade executes against real engine bridges and delivers.
+        // Routing profiles execute against the mock-transport router
+        // (production bridges have no live transport as of v1.20.2).
+        let mock_router = build_mock_router(&[omnicore_engine::models::ProtocolKind::Signal, omnicore_engine::models::ProtocolKind::Matrix, omnicore_engine::models::ProtocolKind::Discord]).await;
+        *state.router.write().await = Some(std::sync::Arc::new(mock_router));
+        // Optimal cascade executes against mock engine bridges and delivers.
         let ok = crate::execute_routing_profile(&state, "optimal_cascade", "Alice Montgomery", "hello profile", "Signal", "Matrix").await;
         assert!(ok.is_ok(), "optimal cascade should deliver: {:?}", ok.err());
         // Exact-once: first send records the digest, identical resend is rejected.
@@ -2212,7 +2216,12 @@ mod tests {
     #[tokio::test]
     async fn test_outbox_queue_and_retry() {
         let state = AppState::default();
-        // Queue a deliverable message and retry it through the real router.
+        // Retry runs through the mock-transport router (production
+        // bridges have no live transport as of v1.20.2, so a "deliverable"
+        // retry needs the explicit mock).
+        let mock_router = build_mock_router(&[omnicore_engine::models::ProtocolKind::Signal, omnicore_engine::models::ProtocolKind::Matrix]).await;
+        *state.router.write().await = Some(std::sync::Arc::new(mock_router));
+        // Queue a deliverable message and retry it through the mock router.
         crate::queue_failed_outgoing(&state, "Alice Montgomery", "retry me", "Signal", "Matrix").await;
         assert_eq!(state.outbox.lock().await.len(), 1);
         let remaining = crate::retry_outbox_inner(&state).await;
